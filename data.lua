@@ -195,7 +195,7 @@ function dataMod.txSlave(dev, ipcPipes, readyInfo, monitorPipe)
 	    buf:getPercgPacket():fill{
 	       pktLength = DATA_PACKET_SIZE,
 	       ethType = eth.TYPE_PERC_DATA}
-      end
+      end,
       ["n"]=perc_constants.DATA_SEND_TXMEMPOOL_SIZE}
       txBufs[q] = mem[q]:bufArray()
    end
