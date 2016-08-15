@@ -8,6 +8,7 @@ local eth = require "proto.ethernet"
 local percg = require "proto.percg"
 local percc1 = require "proto.percc1"
 
+local perc_constants = require "examples.perc-moongen.constants"
 
 local Link = {sumSat = 0, numSat = 0, numUnsat = 0, linkCapacity = perc_constants.END_HOST_LINK_MBPS}
 

@@ -14,7 +14,7 @@ local ipc = require "examples.perc-moongen.ipc"
 local monitor = require "examples.perc-moongen.monitor"
 local perc_constants = require "examples.perc-moongen.constants"
 
-local Link1 = require "examples.perc.perc_link"
+local Link1 = require "examples.perc-moongen.perc_link"
 
 local CONTROL_PACKET_SIZE	= perc_constants.CONTROL_PACKET_SIZE
 local ff64 = 0xFFFFFFFFFFFFFFFF
