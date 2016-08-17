@@ -404,7 +404,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 
       if dpdkNow > nextSendTime and nextFlowId <= numFlows then
 	 -- (get start messages)
-	 nextSendTime = dpdkNow	+ 0.001
+	 nextSendTime = dpdkNow	+ 0.01
 	 numStarted = numStarted + 1
 	 local size = math.ceil(flowSizes:value()/1500.0)
 	 local flow = nextFlowId

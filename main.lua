@@ -42,7 +42,7 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
    txDev:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
    
 
-   dpdk.setRuntime(600)
+   dpdk.setRuntime(5)
    local txIpcPipes = ipc.getInterVmPipes()
    local rxIpcPipes = ipc.getInterVmPipes()
    local monitorPipes = monitor.getPerVmPipes({txPort, rxPort})
