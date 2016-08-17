@@ -27,11 +27,12 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
 			       rxQueues = 4,
 			       txQueues = perc_constants.MAX_QUEUES+1}
    local rxDev = device.config{port = rxPort,
-			       rxQueues = 2,
+			       rxQueues = 4,
 			       txQueues = perc_constants.MAX_QUEUES+1}
    
 	-- filters for data packets
    txDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
+   rxDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
    
    -- filters for control packets
    txDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
@@ -44,7 +45,7 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
    local txIpcPipes = ipc.getInterVmPipes()
    local rxIpcPipes = ipc.getInterVmPipes()
    local monitorPipes = monitor.getPerVmPipes({txPort, rxPort})
-   local readyPipes = ipc.getReadyPipes(2)
+   local readyPipes = ipc.getReadyPipes(4)
    local tableDst = {}
    tableDst[txPort] = txPort
    tableDst[rxPort] = rxPort
@@ -55,11 +56,29 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
 		  true, false,
 		  readyPipes, 1)
 
+   dpdk.launchLua("loadDataSlave", txDev, nil,
+		  nil, txPort, txPort,
+		  nil,
+		  false, true,
+		  readyPipes, 2)
+
+   dpdk.launchLua("loadDataSlave", rxDev, cdfFilepath,
+		  numFlows, rxPort, rxPort,
+		  tableDst,
+		  true, false,
+		  readyPipes, 3)
+
    dpdk.launchLua("loadDataSlave", rxDev, nil,
 		  nil, rxPort, rxPort,
 		  nil,
 		  false, true,
-		  readyPipes, 2)
+		  readyPipes, 4)
+
+   -- dpdk.launchLua("loadDataSlave", rxDev, nil,
+   -- 		  nil, rxPort, rxPort,
+   -- 		  nil,
+   -- 		  false, true,
+   -- 		  readyPipes, 2)
 
    dpdk.waitForSlaves()
 end

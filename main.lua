@@ -26,14 +26,15 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
 
    -- local macAddrType = ffi.typeof("union mac_address")	
    local txDev = device.config{port = txPort,
-			       rxQueues = 4,
+			       rxQueues = 5,
 			       txQueues = perc_constants.MAX_QUEUES+1}
    local rxDev = device.config{port = rxPort,
-			       rxQueues = 2,
+			       rxQueues = 5,
 			       txQueues = perc_constants.MAX_QUEUES+1}
    
 	-- filters for data packets
    txDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
+   rxDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
    
    -- filters for control packets
    txDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)

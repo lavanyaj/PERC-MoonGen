@@ -4,7 +4,7 @@
 import os
 import subprocess
 
-run_perc = "sudo ./build/MoonGen examples/perc-moongen-single/main.lua 0 1 examples/perc-moongen/DCTCP_CDF 1000 > out.txt"
+run_perc = "sudo ./build/MoonGen examples/perc-moongen-single/main1.lua 0 1 examples/perc-moongen/DCTCP_CDF 1000 > out.txt"
 proc = subprocess.Popen(run_perc, stdout=subprocess.PIPE, shell=True)
 (out, err) = proc.communicate()
 
