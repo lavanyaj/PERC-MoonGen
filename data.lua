@@ -22,8 +22,15 @@ local ACK_PACKET_SIZE = perc_constants.ACK_PACKET_SIZE
 
 ffi.cdef [[
 typedef struct foo { bool active; 
-uint64_t flow, size, sent, acked; double acked_time;} txQueueInfo;
-typedef struct bar {uint64_t flow, recv, acked, size;} rxQueueInfo;
+uint64_t flow, size, sent, acked; double acked_time;
+uint8_t percgSrc, percgDst;
+union mac_address ethSrc, ethDst;}
+ txQueueInfo;
+typedef struct bar {
+uint64_t flow, recv, acked, size;
+uint8_t percgSrc, percgDst;
+union mac_address ethSrc, ethDst;}
+ rxQueueInfo;
 ]]
 
 dataMod = {}
@@ -90,6 +97,7 @@ function dataMod.rxSlave(dev, readyInfo)
 	 for b = 1, rx do
 	    local buf = rxBufs[b]
 	    local pkt = buf:getPercgPacket()
+	    -- TODO(lav): exchange src and dst	    
 	    -- assert(pkt.eth:getType() == eth.TYPE_PERC_DATA)
 	    local flow = pkt.payload.uint64[0]
 	    local q = pkt.payload.uint64[1]
@@ -112,6 +120,10 @@ function dataMod.rxSlave(dev, readyInfo)
 	       queueInfo[q].recv = 0ULL
 	       queueInfo[q].acked = 0ULL
 	       queueInfo[q].size = size
+	       queueInfo[q].ethSrc = pkt.eth.src
+	       queueInfo[q].ethDst = pkt.eth.dst
+	       queueInfo[q].percgSrc = pkt.percg:getSource()
+	       queueInfo[q].percgDst = pkt.percg:getDestination()
 	    --    -- dataMod.rxlog("rx set up queue " .. q
 	    --    -- 		      .. " for flow " .. tostring(flow)
 	    --    -- 			 .. " recv " .. tostring(queueInfo[q].recv)
@@ -167,6 +179,9 @@ function dataMod.rxSlave(dev, readyInfo)
       		  pkt.payload.uint64[4] = queueInfo[q].size
       		  pkt.eth:setType(eth.TYPE_ACK)
       		  pkt.eth:setSrc(perc_constants.ACK_TXQUEUE)
+		  pkt.eth:setDst(queueInfo[q].ethSrc)
+		  pkt.percg:setSource(queueInfo[q].percgDst)
+		  pkt.percg:setDestination(queueInfo[q].percgSrc)
 		  end
 	       end
 	       txQueue:send(txBufs)
@@ -220,12 +235,20 @@ function dataMod.txSlave(dev, ipcPipes, readyInfo, monitorPipe)
 	 for _, msg in ipairs(msgs) do
 	    local q = msg.queue
 	    queueInfo[q].flow = msg.flow
+	    queueInfo[q].ethSrc = msg.ethSrc
+	    queueInfo[q].ethDst = msg.ethDst
+	    queueInfo[q].percgSrc = msg.percgSrc
+	    queueInfo[q].percgDst = msg.percgDst -- actually device id only
 	    queueInfo[q].size = msg.size
 	    queueInfo[q].sent = 0
 	    queueInfo[q].acked = 0
 	    queueInfo[q].active = true
 	    queueInfo[q].acked_time = now
 	    dataMod.txlog("Starting a queue for " .. msg.flow
+			     .. " ethSrc " ..tostring(queueInfo[q].ethSrc)
+			     .. " ethDst " ..tostring(queueInfo[q].ethDst)
+			     .. " percgSrc " ..tostring(queueInfo[q].percgSrc)
+			     .. " percgDst " ..tostring(queueInfo[q].percgDst)
 			      .. " size " .. tostring(queueInfo[q].size)
 			      .. " sent " .. tostring(queueInfo[q].sent)
 			      .. " acked " .. tostring(queueInfo[q].acked)
@@ -257,6 +280,12 @@ function dataMod.txSlave(dev, ipcPipes, readyInfo, monitorPipe)
 
 	       for _, buf in ipairs(txBufs[q]) do
 		  local pkt = buf:getPercgPacket()
+		  pkt.percg:setSource(queueInfo[q].percgSrc)
+		  pkt.percg:setDestination(queueInfo[q].percgDst)
+
+		  pkt.eth:setSrc(queueInfo[q].ethSrc)
+		  pkt.eth:setDst(queueInfo[q].ethDst)
+		  
 		  pkt.percg:setFlowId(queueInfo[q].flow) -- 32b -> 16b
 		  pkt.payload.uint64[0] = queueInfo[q].flow
 		  pkt.payload.uint64[1] = q

@@ -10,12 +10,11 @@ constantsMod = {
    ["ACK_PACKET_SIZE"] = 256,
    ["DATA_RXQUEUE"] = 0,
    ["CONTROL_TXQUEUE"] = 1,
+   ["NEW_CONTROL_TXQUEUE"] = 2,
    ["CONTROL_RXQUEUE"] = 1,
-   ["ACK_RXQUEUE"] = 2,
-   ["ACK_TXQUEUE"] = 2,
-   ["DROP_QUEUE"] = 3,
-   ["ETHTYPE_ACK"] = 5678,
-   ["ETHTYPE_DATA"] = 6789,
+   ["ACK_RXQUEUE"] = 3,
+   ["ACK_TXQUEUE"] = 3,
+   ["DROP_QUEUE"] = 4,
    ["MAX_QUEUES"] = 20,
    ["tx_ack_timeout"] = 0.1,
    ["rx_ack_timeout"] = 0.05,
@@ -26,9 +25,9 @@ constantsMod = {
    ["WARN_DATA"] = true,
    ["LOG_RXDATA"] = false,
    ["LOG_TXDATA"] = false,
-   ["LOG_CONTROL"] = false,
+   ["LOG_CONTROL"] = true,
    ["WARN_CONTROL"] = true,
-   ["LOG_APP"] = false
+   ["LOG_APP"] = true
 }
 
 return constantsMod

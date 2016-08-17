@@ -1,17 +1,30 @@
 local ffi = require("ffi")
 local pipe		= require "pipe"
+local headers = require "headers"
+local utils = require "utils"
+local dpdkc = require "dpdkc"
 
 ipcMod = {}
 
 ffi.cdef[[
 // application to control
 // start a flow of size packets at time
-typedef struct { int flow, destination, size, valid;} facStartMsg;  
+typedef struct { int flow, size, valid;
+uint8_t percgSrc;
+uint8_t percgDst;
+union mac_address ethSrc;
+union mac_address ethDst;
+} facStartMsg;  
 typedef facStartMsg* pFacStartMsg;
 
 // control to data
 // start sending data for flow on queue
-typedef struct { int flow, destination, size, queue, valid; } fcdStartMsg;  
+typedef struct { int flow,  size, queue, valid;
+uint8_t percgSrc;
+uint8_t percgDst;
+union mac_address ethSrc;
+union mac_address ethDst;
+} fcdStartMsg;  
 typedef fcdStartMsg* pFcdStartMsg;
 
 // data to control
@@ -22,6 +35,10 @@ typedef fdcFinMsg* pFdcFinMsg;
 typedef struct { int flow, size; double endTime, valid;} fdcFinAckMsg;
 typedef fdcFinAckMsg* pFdcFinAckMsg;
 
+// resource exhausted, can't start flow
+typedef struct { int flow; double valid;} fcaResourceExhaustedMsg;  
+typedef fcaResourceExhaustedMsg* pFcaResourceExhaustedMsg;
+
 // finished sending packets for flow at time
 typedef struct { int flow; double endTime, valid;} fcaFinMsg;  
 typedef fcaFinMsg* pFcaFinMsg;
@@ -30,24 +47,60 @@ typedef struct { int flow, size; double endTime, valid;} fcaFinAckMsg;
 typedef fcaFinAckMsg* pFcaFinAckMsg;
 ]]
 
+local macAddrType = ffi.typeof("union mac_address")
+local istype = ffi.istype
 
-function ipcMod.sendFacStartMsg(pipes, flow, destination, size)
+function ipcMod.sendFacStartMsg(pipes, flow, size,
+				percSrc, percDst, ethSrc, ethDst)
    local msg = ffi.new("facStartMsg")
    msg.flow = flow
-   msg.destination = destination
    msg.size = size
    msg.valid = 1234
+   
+   msg.percgSrc = percSrc
+   msg.percgDst = percDst
+
+   if type(ethSrc) == "number" then
+      local buf = ffi.new("char[20]")
+      dpdkc.get_mac_addr(ethSrc, buf)
+      local ethSrcStr = ffi.string(buf)      
+      msg.ethSrc = parseMacAddress(ethSrcStr)
+   elseif istype(macAddrType, ethSrc) then
+      msg.ethSrc = ethSrc
+   else
+      assert(false)
+   end
+
+   if type(ethDst) == "number" then
+      local buf = ffi.new("char[20]")
+      dpdkc.get_mac_addr(ethDst, buf)
+      local ethDstStr = ffi.string(buf)      
+      msg.ethDst = parseMacAddress(ethDstStr)
+   elseif istype(macAddrType, ethDst) then
+      msg.ethDst = ethDst
+   else
+      assert(false)
+   end
+
    pipes["fastPipeAppToControlStart"]:send(msg)
    --return msg
 end
 
-function ipcMod.sendFcdStartMsg(pipes, flow, destination, size, queue)
+function ipcMod.sendFcdStartMsg(pipes, flow, size, queue,
+			       percSrc, percDst, ethSrc, ethDst)
+
+   assert(istype(macAddrType, ethSrc))
+   assert(istype(macAddrType, ethDst))
+   
    local msg = ffi.new("fcdStartMsg")
    msg.flow = flow
-   msg.destination = destination
    msg.size = size
    msg.queue = queue
    msg.valid = 1234
+   msg.percgSrc = percSrc
+   msg.percgDst = percDst
+   msg.ethSrc = ethSrc
+   msg.ethDst = ethDst
    pipes["fastPipeControlToDataStart"]:send(msg)
    --return msg
 end
@@ -80,6 +133,13 @@ function ipcMod.sendFdcFinAckMsg(pipes, flow, received, endTime)
    --return msg
 end
 
+function ipcMod.sendFcaResourceExhaustedMsg(pipes, flow)
+   local msg = ffi.new("fcaResourceExhaustedMsg")
+   msg.flow = flow
+   msg.valid = 1234
+   pipes["fastPipeControlToAppResourceExhausted"]:send(msg)
+end
+
 function ipcMod.sendFcaFinAckMsg(pipes, flow, received, endTime)
    local msg = ffi.new("fcaFinAckMsg")
    msg.flow = flow
@@ -100,6 +160,10 @@ end
 
 function ipcMod.acceptFdcFinMsgs(pipes)
    return ipcMod.fastAcceptMsgs(pipes, "fastPipeDataToControlFin", "pFdcFinMsg", 20)
+end
+
+function ipcMod.acceptFcaResourceExhaustedMsgs(pipes)
+   return ipcMod.fastAcceptMsgs(pipes, "fastPipeControlToAppResourceExhausted", "pFcaResourceExhaustedMsg", 20)
 end
 
 function ipcMod.acceptFcaFinMsgs(pipes)
@@ -205,6 +269,7 @@ function ipcMod.getInterVmPipes()
 	    ["fastPipeDataToControlFinAck"] = pipe.newFastPipe(20),
 	    ["fastPipeControlToAppFin"] = pipe.newFastPipe(20),
 	    ["fastPipeControlToAppFinAck"] = pipe.newFastPipe(20),
+	    ["fastPipeControlToAppResourceExhausted"] = pipe.newFastPipe(20),
 	    ["slowPipeControlToApp"] = pipe.newSlowPipe()
 	 }
 	 return pipes

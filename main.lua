@@ -8,16 +8,20 @@ local eth = require "proto.ethernet"
 local perc_constants = require "examples.perc-moongen.constants"
 local monitor = require "examples.perc-moongen.monitor"
 local ipc = require "examples.perc-moongen.ipc"
+local fsd = require "examples.perc-moongen.flow-size-distribution"
 
 local app = require "examples.perc-moongen.app"
-local control = require "examples.perc-moongen.control"
+local control = require "examples.perc-moongen.control1"
 local data = require "examples.perc-moongen.data"
 
 
-function master(txPort, rxPort)
-	if not txPort or not rxPort then
-	   return log:info("usage: txPort rxPort")
+function master(txPort, rxPort, cdfFilepath)
+	if not txPort or not rxPort or not cdfFilepath then
+	   return log:info("usage: txPort rxPort cdfFilepath")
 	end
+
+
+	-- local macAddrType = ffi.typeof("union mac_address")	
 	local txDev = device.config{port = txPort,
 				    rxQueues = 4,
 				    txQueues = perc_constants.MAX_QUEUES+1}
@@ -27,7 +31,7 @@ function master(txPort, rxPort)
 
 	-- filters for data packets
 	txDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
-
+	
 	-- filters for control packets
 	txDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
 	rxDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
@@ -40,13 +44,17 @@ function master(txPort, rxPort)
 	local rxIpcPipes = ipc.getInterVmPipes()
 	local monitorPipes = monitor.getPerVmPipes({txPort, rxPort})
 	local readyPipes = ipc.getReadyPipes(6)
+	local tableDst = {}
+	tableDst[txPort] = txPort
+	tableDst[rxPort] = rxPort
 	
  	dpdk.launchLua("sendDataSlave", txDev, txIpcPipes, nil,
 		     readyPipes, 1)
 	dpdk.launchLua("controlSlave", txDev, txIpcPipes, nil,
 		     readyPipes, 2)
-	dpdk.launchLua("genFlowsSlave", txDev, txIpcPipes, nil,
-		     readyPipes, 3)
+	dpdk.launchLua("genFlowsSlave", txDev, txIpcPipes, nil, cdfFilepath,
+		       txPort, tableDst[txPort], tableDst,
+		       readyPipes, 3)
 	dpdk.launchLua("recvDataSlave", rxDev, nil, nil,
 		     readyPipes, 4)
 	dpdk.launchLua("controlSlave", rxDev, nil, nil,
@@ -79,12 +87,13 @@ function controlSlave(dev, ipcPipes, monitorPipes, readyPipes, id)
 			 monitorPipe)
 end   
 
-function genFlowsSlave(dev, ipcPipes, monitorPipes, readyPipes, id)
+function genFlowsSlave(dev, ipcPipes, monitorPipes, cdfFilepath,
+		       percgSrc, ethSrc, tableDst, readyPipes, id)
    local monitorPipe = nil
    if monitorPipes ~= nil then
       monitorPipe = monitorPipes["app-".. dev.id] end
-
-   app.applicationSlave(ipcPipes,
+   tableDst[percgSrc] = nil
+   app.applicationSlave(ipcPipes, cdfFilepath, percgSrc, ethSrc, tableDst,
 			 {["pipes"]=readyPipes, ["id"]=id},
 			 monitorPipe)
 end
