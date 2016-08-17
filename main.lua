@@ -1,3 +1,6 @@
+-- Usage:
+-- sudo ./build/MoonGen examples/perc-moongen-single/main.lua 0 1 examples/perc-moongen/DCTCP_CDF 1000
+--
 local filter    = require "filter"
 local dpdk	= require "dpdk"
 local device	= require "device"

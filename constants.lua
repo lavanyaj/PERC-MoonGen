@@ -18,6 +18,7 @@ constantsMod = {
    ["MAX_QUEUES"] = 60,
    ["tx_ack_timeout"] = 0.1,
    ["rx_ack_timeout"] = 0.05,
+   ["rtts"] = 0.0005,
    ["LOG_EVERY_N_SECONDS"] = 1e-3,
    ["NEW_FLOWS_PER_CONTROL_LOOP"] = 2,
    ["NIC_DESCRIPTORS_PER_QUEUE"] = 512, -- not 40

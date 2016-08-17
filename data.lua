@@ -10,6 +10,7 @@ local pkt = require("packet")
 local pipe		= require "pipe"
 
 local fsd = require "examples.perc-moongen-single.flow-size-distribution"
+local PercLink = require "examples.perc-moongen-single.perc_link"
 
 local percg = require "proto.percg"
 local percc1 = require "proto.percc1"
@@ -19,6 +20,7 @@ local ipc = require "examples.perc-moongen-single.ipc"
 local monitor = require "examples.perc-moongen-single.monitor"
 local perc_constants = require "examples.perc-moongen-single.constants"
 
+local CONTROL_PACKET_SIZE = perc_constants.CONTROL_PACKET_SIZE
 local DATA_PACKET_SIZE	= perc_constants.DATA_PACKET_SIZE
 local ACK_PACKET_SIZE = perc_constants.ACK_PACKET_SIZE
 
@@ -26,7 +28,8 @@ ffi.cdef [[
 typedef struct foo { bool active; 
 uint64_t flow, size, sent, acked; double acked_time, start_time;
 uint8_t percgSrc, percgDst;
-union mac_address ethSrc, ethDst;}
+union mac_address ethSrc, ethDst;
+int currentRate, nextRate; double changeTime;}
  txQueueInfo;
 typedef struct bar {
 uint64_t flow, recv, acked, size;
@@ -55,6 +58,7 @@ function dataMod.warn(str)
    end
 end
 
+-- receives control packets too
 -- receives data packets and sends acks
 function dataMod.rxSlave(dev, readyInfo)
    local thisCore = dpdk.getCore()
@@ -64,6 +68,12 @@ function dataMod.rxSlave(dev, readyInfo)
 
    
    ipc.waitTillReady(readyInfo)
+
+   local link = PercLink:new()
+   local cRxQueue = dev:getRxQueue(perc_constants.CONTROL_RXQUEUE)
+   local cMem = memory.createMemPool()
+   local cBufs = memory.bufArray()   
+
    local mem = memory.createMemPool{
       ["func"]=function(buf) 
    	 buf:getPercgPacket():fill{
@@ -93,31 +103,30 @@ function dataMod.rxSlave(dev, readyInfo)
 
    
    while dpdk.running() do
+      local dpdkNow = dpdk.getTime()
+      do -- receive control packets, process and send back
+	 local rx = cRxQueue:tryRecv(cBufs, 20)
+	 for b = 1, rx do
+	    local pkt = cBufs[b].getPercc1Packet()
+	    pkt.percc1:doNtoh()
+	    assert(pkt.percc1:IsForward())
+	    link:processPercc1Packet(pkt)
+	    receiverControlProcess(pkt)
+	    pkt.percc1:doHton()
+	 end
+	 dev:getTxQueue(perc_constants.CONTROL_TXQUEUE):sendN(cBufs, rx)
+      end
+
       --dataMod.rxlog("receive data packets\n")
-      local ackNow = false      
+      local ackNow = false
       do
 	 local rx = rxQueue:recv(rxBufs)
 	 for b = 1, rx do
 	    local buf = rxBufs[b]
 	    local pkt = buf:getPercgPacket()
-	    -- TODO(lav): exchange src and dst	    
-	    -- assert(pkt.eth:getType() == eth.TYPE_PERC_DATA)
 	    local flow = pkt.payload.uint64[0]
 	    local q = pkt.payload.uint64[1]
-	    -- local seqNo = pkt.payload.uint64[2]	
-	    -- local checksumRx = pkt.payload.uint64[3]
 	    local size = pkt.payload.uint64[4]
-	    -- local checksumC = flow + q + seqNo
-	    -- if (checksumRx ~= checksumC) then
-	    --    dataMod.warn("checksum doesn't match recvd for data pkt "
-	    -- 			.. pkt.percg:getString()
-	    -- 			.. " flow " .. tostring(flow)
-	    -- 			.. " q " .. tostring(q)
-	    -- 			.. " seqNo " .. tostring(seqNo)
-	    -- 			.. " checksumRx " .. tostring(checksumRx)
-	    -- 			.. " computed " .. tostring(checksumC))
-	    -- end
-	    -- assert(checksumRx == checksumC)
 	    if queueInfo[q].flow ~= flow then
 	       queueInfo[q].flow = flow 
 	       queueInfo[q].recv = 0ULL
@@ -127,11 +136,6 @@ function dataMod.rxSlave(dev, readyInfo)
 	       queueInfo[q].ethDst = pkt.eth.dst
 	       queueInfo[q].percgSrc = pkt.percg:getSource()
 	       queueInfo[q].percgDst = pkt.percg:getDestination()
-	    --    -- dataMod.rxlog("rx set up queue " .. q
-	    --    -- 		      .. " for flow " .. tostring(flow)
-	    --    -- 			 .. " recv " .. tostring(queueInfo[q].recv)
-	    --    -- 			 .. " acked " .. tostring(queueInfo[q].acked)
-	    --    -- 			 .. ", flow size " .. tostring(queueInfo[q].size))
 	    end
 	    -- assert(seqNo < size)
 	    assert(queueInfo[q].size == size)	   
@@ -139,12 +143,6 @@ function dataMod.rxSlave(dev, readyInfo)
 	    if (queueInfo[q].recv == queueInfo[q].size) then
 	       ackNow = true
 	    end
-	    -- if (queueInfo[q].recv >  queueInfo[q].size) then
-	    --     dataMod.warn("rx received more packets than size"
-	    --  		      .. " for flow " .. tostring(flow)
-	    --  			 .. " size " .. tostring(queueInfo[q].size)
-	    --  			 .. " < recv " .. tostring(queueInfo[q].recv))
-	    -- end	 
 	    assert(queueInfo[q].recv <= queueInfo[q].size)	    
 	 end
 	 if rx > 0 then
@@ -191,12 +189,120 @@ function dataMod.rxSlave(dev, readyInfo)
 	    end
       	 end -- ends if ackTime..	 
       end -- ends do
-
    end -- ends while dpdk.running
    rxCtr:finalize()
-   dataMod.rxlog("dpdk running on rxslave " .. tostring(dpdk.running()))
+
 end
+
+function initializePercc1Packet(buf, percgSrc, ethSrc,
+				percgDst, ethDst,
+			        flowId)
+   buf:getPercc1Packet():fill{
+      pktLength = CONTROL_PACKET_SIZE,
+      percgSource = percgSrc, -- TO CHANGE
+      percgDestination = percgDst, -- TO CHANGE
+      percgFlowId = flowId, -- TO CHANGE
+      percgIsData = percg.PROTO_CONTROL,
+      percc1IsForward = percc1.IS_FORWARD,
+      percc1IsExit = percc1.IS_NOT_EXIT,
+      percc1Hop = 0,
+      percc1MaxHops = 0,
+      ethSrc = ethSrc, -- TO CHANGE
+      ethDst = ethDst, -- TO CHANGE
+      ethType = eth.TYPE_PERCG}
+end
+
+function commonControlProcess(pkt)
+   do
+      local tmp = pkt.eth:getDst()
+      pkt.eth.setDst(pkt.eth:getSrc())
+      pkt.eth.setSrc(tmp)
+   end
+
+   do
+      local tmp = pkt.percg:getDestination()
+      pkt.percg:setDestination(pkt.percg:getSource())
+      pkt.percg:setSource(tmp)
+   end
    
+   -- get maxHops, then smallest index, two rates
+   local maxHops = pkt.percc1:getHop()
+   if (pkt.percc1:getIsForward() ~= percc1.IS_FORWARD) then
+      maxHops = pkt.percc1:getMaxHops()
+   end
+   local bnInfo = pkt.percc1:getBottleneckInfo(maxHops)
+   local bnRate1, bnRate2 = bnInfo.bnRate1, bnInfo.bnRate2   
+   local bnBitmap = bnInfo.bnBitmap
+   assert(bnRate1 ~= nil)
+   assert(bnRate2 ~= nil)
+   assert(bnBitmap ~= nil)
+   -- then set rate at each index
+   -- and unsat/ sat at each index
+   --pkt.percg:setRatesAndLabelGivenBottleneck(rate, hop, maxHops)	      
+   for i=1,maxHops do		 
+      pkt.percc1:setOldLabel(i, pkt.percc1:getNewLabel(i))
+      pkt.percc1:setOldRate(i,  pkt.percc1:getNewRate(i))
+      if bnBitmap[i] ~= 1 then
+	 pkt.percc1:setNewLabel(i, percc1.LABEL_SAT)
+	 pkt.percc1:setNewRate(i,  bnRate1)
+	 -- controlMod.log("setting new rate of " .. i
+	 -- 	  .. " to " .. bnRate1)
+      else
+	 pkt.percc1:setNewLabel(i, percc1.LABEL_UNSAT)
+	 pkt.percc1:setNewRate(i, bnRate2)
+	 -- controlMod.log("setting new rate of " .. i
+	 -- 	  .. " to " .. bnRate2)
+      end
+   end -- for i=1,maxHops
+   pkt.percc1:setMaxHops(maxHops) -- and hop is the same
+
+   do 
+      if (pkt.percc1:getIsForward() ~= percc1.IS_FORWARD) then
+	 pkt.percc1:setIsForward(percc1.IS_FORWARD)
+      else
+	 pkt.percc1:setIsForward(percc1.IS_NOT_FORWARD)
+      end
+   end
+   
+   return bnRate1
+end
+
+
+function receiverControlProcess(pkt)
+   commonControlProcess(pkt)
+end
+
+function senderControlProcess(pkt, queueInfo, dpdkNow)
+   local newRate = commmonControlProcess(pkt)
+   if (pkt.percc1:GetIsExit() == percc1.IS_EXIT) then
+      pkt.eth.setType(eth.TYPE_DROP)
+      return
+   end
+
+   if (queueInfo == nil) then
+      pkt.percc1:SetIsExit(percc1.IS_EXIT)
+      return
+   end
+
+   -- update rate info
+   assert(newRate ~= nil)
+   assert(queueInfo.currentRate ~= -1)
+   if (newRate < queueInfo.currenRate) then
+      queueInfo.nextRate = newRate
+      queueInfo.changeTime = dpdkNow
+   elseif (queueInfo.nextRate == -1) then
+      queueInfo.nextRate = newRate
+      queueInfo.changeTime = dpdkNow + 2 * perc_constants.rtts
+   elseif (newRate <= queueInfo.nextRate) then
+      queueInfo.nextRate = newRate
+   else
+      assert(newRate > queueInfo.nextRate)
+      queueInfo.nextRate = newRate
+      queueInfo.changeTime = dpdkNow + 2 * perc_constants.rtts
+   end
+   return
+end
+
 -- sends data packets and receives acks
 function dataMod.txSlave(dev, cdfFilepath, numFlows,
 			 percgSrc, ethSrc,
@@ -239,12 +345,26 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 
    ipc.waitTillReady(readyInfo)
 
+
+   local cNewMem = memory.createMemPool{
+      	 ["func"]=function(buf)
+	    buf:getPercgPacket():fill{
+	       pktLength = CONTROL_PACKET_SIZE,
+	       ethType = eth.TYPE_PERCG}
+      end}
+   local cNewBufs = cNewMem:bufArray()
+   local cMem = memory.createMemPool()
+   local cBufs = memory.bufArray()   
+   local cRxQueue = dev:getRxQueue(perc_constants.CONTROL_RXQUEUE)
+
+   local link = PercLink:new()
    local mem = {}
    local txBufs = {}
 
    local freeQueues = {}
    for i=1, perc_constants.MAX_QUEUES do
       if i ~= perc_constants.CONTROL_TXQUEUE
+	 and i ~= perc_constants.NEW_CONTROL_TXQUEUE
 	 and i ~= perc_constants.ACK_TXQUEUE
       and i ~= perc_constants.DROP_QUEUE then 
 	 table.insert(freeQueues, i)
@@ -291,6 +411,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 	 local percgDst = 1
 	 assert(next(freeQueues) ~= nil)
 	 local q = table.remove(freeQueues)
+	 assert(q ~= nil)
 	 queueInfo[q].flow = flow
 	 queueInfo[q].ethSrc = ethSrc
 	 queueInfo[q].ethDst = ethDst
@@ -302,11 +423,49 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 	 queueInfo[q].active = true
 	 queueInfo[q].acked_time = dpdkNow
 	 queueInfo[q].start_time = dpdkNow
+	 queueInfo[q].currentRate = dev:getTxQueue(q):getTxRate()
+	 queueInfo[q].nextRate = -1
+	 queueInfo[q].changeTime = -1
 	 log:info("flow " .. tostring(flow)
 		     .. " started (queue " .. tostring(q) .. ")")
+
+
+	 -- send  a new control packet
+	 cNewBufs:alloc(1)
+	 initializePercc1Packet(cNewBufs[1], percgSrc, ethSrc,
+				percgDst, ethDst, flow)
+	 txQueues[perc_constants.NEW_CONTROL_TXQUEUE]:send(cNewBufs)
 	 nextFlowId = nextFlowId + 1
       end -- ends do (get start messages)
 
+      do -- receive control packets, process and send back
+	 local rx = cRxQueue:tryRecv(cBufs, 20)
+	 for b = 1, rx do
+	    local pkt = cBufs[b].getPercc1Packet()
+	    pkt.percc1:doNtoh()
+	    link:processPercc1Packet(pkt)
+	    if pkt.percc1:IsForward() then receiverControlProcess(pkt)
+	    else
+	       local q = tonumber(pkt.payload.uint32[0])
+	       local qi = queueInfo[q]
+	       if qi.active == false or
+	       tonumber(qi.flow) ~= pkt.percg:getFlowId() then
+		  qi = nil
+	       end
+	       -- TODO: check it's passed by ref
+	       senderProcess(pkt, qi, dpdkNow)
+	       if qi ~= nil and qi.changeTime == dpdkNow then
+		  txQueues[q].setRate(qi.nextRate)
+		  qi.nextRate = -1
+		  qi.currentRate = qi.nextRate
+		  qi.changeTime = -1
+		  end
+	    end
+	    link:processPercc1Packet(pkt)
+	    pkt.percc1:doHton()
+	 end
+	 txQueues[perc_constants.CONTROL_TXQUEUE]:sendN(cBufs, rx)
+      end
       do -- (send data packets)
 	 for q=1,perc_constants.MAX_QUEUES do
 	    assert(queueInfo[q].size >= queueInfo[q].sent)
