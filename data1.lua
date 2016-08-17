@@ -170,9 +170,9 @@ end
 -- sends data packets and receives acks
 function dataMod.txSlave(dev, cdfFilepath, numFlows,
 			 percgSrc, ethSrc,
-			 tableDst, readyInfo,
-			 isSending, isReceiving)
-   dpdk.sleepMillis(500)   
+			 tableDst, 
+			 isSending, isReceiving,
+			 readyInfo)
    local thisCore = dpdk.getCore()   
 
    if type(ethSrc) == "number" then
@@ -186,12 +186,12 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
       assert(false)
    end
 
-   log:print("Data slave running on "
+   log:info("Data slave running on "
 		.. " dev " .. dev.id 
-		.. " MAC addr " .. toString(ethSrc)
+		.. " MAC addr " .. tostring(ethSrc)
 		.. ", core " .. thisCore
-		.. ", isSending " .. isSending
-		.. ", isReceiving " .. isReceiving
+		.. ", isSending " .. tostring(isSending)
+		.. ", isReceiving " .. tostring(isReceiving)
 		.. "\n")
 
    if isSending == false then
@@ -220,16 +220,14 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
    local percgDst = nil
 
    if isSending then
-      local flowSizes = fsd.create()
+      flowSizes = fsd.create()
       flowSizes:loadCDF(cdfFilepath)
       local avgFlowSize = flowSizes:avg()
       assert(avgFlowSize > 0)
       log:info("loaded flow sizes file with avg. flow size "
 		  .. tostring(avgFlowSize/1500) .. " packets.\n")
 
-      local percgDst, ethDst = next(tableDst)
-
-
+      percgDst, ethDst = next(tableDst)
       if type(ethDst) == "number" then
 	 local buf = ffi.new("char[20]")
 	 dpdkc.get_mac_addr(ethDst, buf)
@@ -241,8 +239,6 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 	 assert(false)
       end
    end
-
-   ipc.waitTillReady(readyInfo)
 
    -- common variables
    -- for control packets processing
@@ -293,7 +289,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
       for q=1,perc_constants.MAX_QUEUES do
 	 txQueues[q] = dev:getTxQueue(q)
       end
-      rxCtr = stats:newDevRxCounter(rxQueue, "plain")
+      rxCtr = stats:newDevRxCounter(dev, "plain")
    end
    
    if isSending then
@@ -372,6 +368,11 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
       numFinished = 0
    end
 
+   ipc.waitTillReady(readyInfo)
+   if isSending and (isReceiving == false) then
+      dpdk.sleepMillis(500)
+   end
+   
    -- a thread that's receiving runs forever
    -- a thread that's only sending stops as soon as all finish
    while dpdk.running() and
@@ -573,8 +574,8 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 	       if ackNow then
 		  local newAcks = 0
 		  for q=1,perc_constants.MAX_QUEUES do
-		     assert(queueInfo[q].recv <= queueInfo[q].size)
-		     if queueInfo[q].recv > queueInfo[q].acked then
+		     assert(rxQueueInfo[q].recv <= rxQueueInfo[q].size)
+		     if rxQueueInfo[q].recv > rxQueueInfo[q].acked then
 			newAcks = newAcks + 1 end
 		  end
 		  if newAcks > 0 then
@@ -584,7 +585,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 			if rxQueueInfo[q].recv > rxQueueInfo[q].acked then
 			   rxQueueInfo[q].acked = rxQueueInfo[q].recv
 			   assert(b <= newAcks)
-			   local pkt = txBufs[b]:getPercgPacket()
+			   local pkt = ackTxBufs[b]:getPercgPacket()
 			   b = b + 1
 			   pkt.payload.uint64[0] = rxQueueInfo[q].flow 
 			   pkt.payload.uint64[1] = q -- lua number -> double -> 32b
@@ -602,11 +603,13 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 		     txQueues[perc_constants.ACK_TXQUEUE]:send(ackTxBufs)
 		  end
 	       end -- ends if newAcks > 0
-	    end
-	 end
-      end -- ends while dpdk.running()
-      rxCtr:finalize()
-      txCtr:finalize()
-   end
+	    end -- ends do for sending ACKs
+	 end -- ends fo for receiving data and sending ACKs
+      end -- ends if Receiving
+   end -- ends while dpdk.running()
+   rxCtr:finalize()
+   txCtr:finalize()
+end
 
-   return dataMod
+return dataMod
+   
