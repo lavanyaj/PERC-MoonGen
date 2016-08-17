@@ -47,49 +47,7 @@ function appMod.bytesToSizeStr(numBytes)
    end
 end
 
-function appMod.finalize(flowInfoTable, numFlows, linkSpeed, fileName)
-   local now = dpdk.getTime()
-   local numFlowsBySize = {}
-   local numFinishedBySize = {}
-   fctFilesBySize = {}
-   for _, sizeStr in ipairs({"small", "medium", "large"}) do
-      numFlowsBySize[sizeStr] = 0
-      numFinishedBySize[sizeStr] = 0
-      fctFilesBySize[sizeStr] = io.open(fileName .. "-" .. sizeStr .. "-" .. tostring(now) .. ".txt")
-   end   
-   local fctFile = io.open(fileName .. "-" .. tostring(now))
-   assert(fctFile ~= nil)
-   fctFile:write(string.format("flow finished linkSpeed totalBytes totalPackets fct startTime endTime minFctAt1G minFctAt10G normFct ackedPackets"))
-   for i = 0, numFlows-1 do
-      local flowInfo = flowInfoTable[i]
-      if flowInfo.startTime > 0 then
-	 local fct = (flowInfo.ackedTime - flowInfo.startTime) * 1e6 -- microseconds
-	 local finishedStr = "finished"
-	 if (flowInfo.totalPackets ~= flowInfo.ackedPackets) then
-	    finishedStr = "unfinished"
-	 end
-	 
-	 local minFctAt10G = flowInfo.totalPackets * 1.2
-	 local minFctAt1G = flowInfo.totalPackets * 1.2 * 10
-	 local normFct = fct/minFctAt10G	 
-	 if linkSpeed == 1000 then normFct = fct/minFctAt1G end -- link speeds in Mb/s
-	 local sizeStr = appMod.bytesToSizeStr(totalBytes)
-	 numFlowsBySize[sizeStr] = numFlowsbySize[sizeStr] + 1
-	 if finishedStr == "finished" then
-	    numFinishedBySize[sizeStr] = numFinishedbySize[sizeStr] + 1
-	    fctFilesBySize:write(normFct .. "\n")
-	 end
-	 fctFile:write(
-	    tostring(i) .. " " .. tostring(finishedStr) .. " " .. tostring(linkSpeed)
-	       .. " " .. tostring(flowInfo.totalBytes) .. " " .. tostring(flowInfo.totalPackets)
-	       .. " " .. tostring(fct) .. " " .. tostring((flowInfo.startTime * 1e6))
-	       .. " " .. tostring(flowInfo.ackedTime * 1e6) .. " " .. tostring( minFctAt1G)
-		     .. " " .. tostring(minFctAt10G) .. " " .. tostring(normFct)
-	       .. " " .. tostring(flowInfo.ackedPackets) .. "\n")
-	 end
-   end
-   -- then I would os.execute( R script to get 99th and median) to capture 99th and median for all sizes
-   -- then I would output it the the GUI's input file
+function appMod.finalize(flowInfoTable, numFlows, linkSpeed, outputPrefix)
 end
 
 function appMod.applicationSlave(pipes, cdfFilepath,
@@ -245,7 +203,66 @@ function appMod.applicationSlave(pipes, cdfFilepath,
 	 end
       end
    end
-   appMod.finalize(flowInfoTable, numFlows, 10000, "output-app".. readyInfo.id .."-" .. source .. "-" .. destination)
+   outputPrefix = ("output-app".. readyInfo.id .."-" .. ethSrc .. "-" .. fixedEthDst)
+   assert(outputPrefix ~= nil)
+   appMod.log("Logging output to " .. outputPrefix)
+
+   linkSpeed = 10000
+
+   do
+      local now = dpdk.getTime()
+      local numFlowsBySize = {}
+      local numFinishedBySize = {}
+      fctFilesBySize = {}
+      for _, sizeStr in ipairs({"small", "medium", "large"}) do
+	 numFlowsBySize[sizeStr] = 0
+	 numFinishedBySize[sizeStr] = 0
+	 local fileName = (outputPrefix .. "-" .. sizeStr
+			      .. "-" .. tostring(now) .. ".txt")
+	 
+	 fctFilesBySize[sizeStr] = io.open(fileName, "w")
+	 assert(fctFilesBySize[sizeStr] ~= nil)
+      end   
+      local fileName1 = (outputPrefix .. "-" .. tostring(now) .. "-" .. ".txt")
+      local fctFile = io.open(fileName1, "w")
+      
+      assert(fctFile ~= nil)
+      fctFile:write(string.format("flow finished linkSpeed totalBytes totalPackets fct startTime endTime minFctAt1G minFctAt10G normFct ackedPackets\n"))
+      for i = startFlowId, lastFlowId do
+	 local flowInfo = flowInfoTable[i]
+	 appMod.log("outputting stats for flow " .. i
+		       .. " startTime " .. flowInfo.startTime
+		       .. " ackedTime " .. flowInfo.ackedTime .. "\n")
+	 if flowInfo.startTime > 0 then
+	    local fct = (flowInfo.ackedTime - flowInfo.startTime) * 1e6 -- microseconds
+	    local finishedStr = "finished"
+	    if (flowInfo.totalPackets ~= flowInfo.ackedPackets) then
+	       finishedStr = "unfinished"
+	    end
+	    
+	    local minFctAt10G = flowInfo.totalPackets * 1.2
+	    local minFctAt1G = flowInfo.totalPackets * 1.2 * 10
+	    local normFct = fct/minFctAt10G	 
+	    if linkSpeed == 1000 then normFct = fct/minFctAt1G end -- link speeds in Mb/s
+	    local sizeStr = appMod.bytesToSizeStr(flowInfo.totalBytes)
+	    numFlowsBySize[sizeStr] = numFlowsBySize[sizeStr] + 1
+	    if finishedStr == "finished" then
+	       numFinishedBySize[sizeStr] = numFinishedBySize[sizeStr] + 1
+	       fctFilesBySize[sizeStr]:write(normFct .. "\n")
+	    end
+	    fctFile:write(
+	       tostring(i) .. " " .. tostring(finishedStr) .. " " .. tostring(linkSpeed)
+		  .. " " .. tostring(flowInfo.totalBytes) .. " " .. tostring(flowInfo.totalPackets)
+		  .. " " .. tostring(fct) .. " " .. tostring((flowInfo.startTime * 1e6))
+		  .. " " .. tostring(flowInfo.ackedTime * 1e6) .. " " .. tostring( minFctAt1G)
+		  .. " " .. tostring(minFctAt10G) .. " " .. tostring(normFct)
+		  .. " " .. tostring(flowInfo.ackedPackets) .. "\n")
+	 end
+      end
+      -- then I would os.execute( R script to get 99th and median) to capture 99th and median for all sizes
+      -- then I would output it the the GUI's input file
+
+   end
 end
 
 return appMod
