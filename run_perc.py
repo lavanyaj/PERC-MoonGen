@@ -3,8 +3,19 @@
 #
 import os
 import subprocess
+import sys
 
-run_perc = "sudo ./build/MoonGen examples/perc-moongen-single/main1.lua 0 1 examples/perc-moongen/DCTCP_CDF 1000 > out.txt"
+print sys.argv
+
+if len(sys.argv) == 1:
+    mainFile = "main1.lua"
+else:
+    mainFile = sys.argv[1]
+    
+run_perc = "sudo ./build/MoonGen examples/perc-moongen-single/" + mainFile + " 0 1 examples/perc-moongen/DCTCP_CDF 1000 > out.txt"
+
+print run_perc
+
 proc = subprocess.Popen(run_perc, stdout=subprocess.PIPE, shell=True)
 (out, err) = proc.communicate()
 
