@@ -13,9 +13,7 @@ local monitor = require "examples.perc-moongen-single.monitor"
 local ipc = require "examples.perc-moongen-single.ipc"
 local fsd = require "examples.perc-moongen-single.flow-size-distribution"
 
-local app = require "examples.perc-moongen-single.app"
-local control = require "examples.perc-moongen-single.control1"
-local data = require "examples.perc-moongen-single.data"
+local data = require "examples.perc-moongen-single.data1"
 
 
 function master(txPort, rxPort, cdfFilepath, numFlows)
