@@ -1,6 +1,6 @@
 -- Usage:
--- sudo ./build/MoonGen examples/perc-moongen-single/main.lua 0 1 examples/perc-moongen/DCTCP_CDF 1000
--- two threads per port
+-- sudo ./build/MoonGen examples/perc-moongen-single/main2.lua 0 1 examples/perc-moongen/DCTCP_CDF 1000
+-- one thread per port
 local filter    = require "filter"
 local dpdk	= require "dpdk"
 local device	= require "device"
@@ -45,7 +45,7 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
    local txIpcPipes = ipc.getInterVmPipes()
    local rxIpcPipes = ipc.getInterVmPipes()
    local monitorPipes = monitor.getPerVmPipes({txPort, rxPort})
-   local readyPipes = ipc.getReadyPipes(4)
+   local readyPipes = ipc.getReadyPipes(2)
    local tableDst = {}
    tableDst[txPort] = txPort
    tableDst[rxPort] = rxPort
@@ -53,26 +53,15 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
    dpdk.launchLua("loadDataSlave", txDev, cdfFilepath,
 		  numFlows, txPort, txPort,
 		  tableDst,
-		  true, false,
+		  true, true,
 		  readyPipes, 1)
 
-   dpdk.launchLua("loadDataSlave", txDev, nil,
-		  nil, txPort, txPort,
-		  nil,
-		  false, true,
-		  readyPipes, 2)
-
+   
    dpdk.launchLua("loadDataSlave", rxDev, cdfFilepath,
 		  numFlows, rxPort, rxPort,
 		  tableDst,
-		  true, false,
-		  readyPipes, 3)
-
-   dpdk.launchLua("loadDataSlave", rxDev, nil,
-		  nil, rxPort, rxPort,
-		  nil,
-		  false, true,
-		  readyPipes, 4)
+		  true, true,
+		  readyPipes, 2)
 
    -- dpdk.launchLua("loadDataSlave", rxDev, nil,
    -- 		  nil, rxPort, rxPort,
