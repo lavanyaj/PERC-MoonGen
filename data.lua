@@ -9,20 +9,22 @@ local stats		= require "stats"
 local pkt = require("packet")
 local pipe		= require "pipe"
 
+local fsd = require "examples.perc-moongen-single.flow-size-distribution"
+
 local percg = require "proto.percg"
 local percc1 = require "proto.percc1"
 local eth = require "proto.ethernet"
 
-local ipc = require "examples.perc-moongen.ipc"
-local monitor = require "examples.perc-moongen.monitor"
-local perc_constants = require "examples.perc-moongen.constants"
+local ipc = require "examples.perc-moongen-single.ipc"
+local monitor = require "examples.perc-moongen-single.monitor"
+local perc_constants = require "examples.perc-moongen-single.constants"
 
 local DATA_PACKET_SIZE	= perc_constants.DATA_PACKET_SIZE
 local ACK_PACKET_SIZE = perc_constants.ACK_PACKET_SIZE
 
 ffi.cdef [[
 typedef struct foo { bool active; 
-uint64_t flow, size, sent, acked; double acked_time;
+uint64_t flow, size, sent, acked; double acked_time, start_time;
 uint8_t percgSrc, percgDst;
 union mac_address ethSrc, ethDst;}
  txQueueInfo;
@@ -89,6 +91,7 @@ function dataMod.rxSlave(dev, readyInfo)
    local seq = 0ULL
    local lastAckTime = dpdk.getTime()
 
+   
    while dpdk.running() do
       --dataMod.rxlog("receive data packets\n")
       local ackNow = false      
@@ -195,14 +198,58 @@ function dataMod.rxSlave(dev, readyInfo)
 end
    
 -- sends data packets and receives acks
-function dataMod.txSlave(dev, ipcPipes, readyInfo, monitorPipe)
+function dataMod.txSlave(dev, cdfFilepath, numFlows,
+			 percgSrc, ethSrc,
+			 tableDst, readyInfo)
+   dpdk.sleepMillis(500)   
    local thisCore = dpdk.getCore()
    dataMod.txlog("Data tx slave running on dev "
 		   .. dev.id .. ", core " .. thisCore)
-   assert(ipcPipes ~= nil)
+
+   local flowSizes = fsd.create()
+   flowSizes:loadCDF(cdfFilepath)
+   local avgFlowSize = flowSizes:avg()
+   assert(avgFlowSize > 0)
+   log:info("loaded flow sizes file with avg. flow size "
+     	      .. tostring(avgFlowSize/1500) .. " packets.\n")
+
+   local percgDst, ethDst = next(tableDst)
+
+   if type(ethSrc) == "number" then
+      local buf = ffi.new("char[20]")
+      dpdkc.get_mac_addr(ethSrc, buf)
+      local ethSrcStr = ffi.string(buf)      
+      ethSrc = parseMacAddress(ethSrcStr)
+   elseif istype(macAddrType, ethSrc) then
+      ethSrc = ethSrc
+   else
+      assert(false)
+   end
+
+   if type(ethDst) == "number" then
+      local buf = ffi.new("char[20]")
+      dpdkc.get_mac_addr(ethDst, buf)
+      local ethDstStr = ffi.string(buf)      
+      ethDst = parseMacAddress(ethDstStr)
+   elseif istype(macAddrType, ethDst) then
+      ethDst = ethDst
+   else
+      assert(false)
+   end
+
    ipc.waitTillReady(readyInfo)
+
    local mem = {}
    local txBufs = {}
+
+   local freeQueues = {}
+   for i=1, perc_constants.MAX_QUEUES do
+      if i ~= perc_constants.CONTROL_TXQUEUE
+	 and i ~= perc_constants.ACK_TXQUEUE
+      and i ~= perc_constants.DROP_QUEUE then 
+	 table.insert(freeQueues, i)
+      end
+   end
 
    for q = 1, perc_constants.MAX_QUEUES do
       mem[q] = memory.createMemPool{
@@ -210,8 +257,7 @@ function dataMod.txSlave(dev, ipcPipes, readyInfo, monitorPipe)
 	    buf:getPercgPacket():fill{
 	       pktLength = DATA_PACKET_SIZE,
 	       ethType = eth.TYPE_PERC_DATA}
-      end,
-      ["n"]=perc_constants.DATA_SEND_TXMEMPOOL_SIZE}
+      end}
       txBufs[q] = mem[q]:bufArray()
    end
    
@@ -226,92 +272,74 @@ function dataMod.txSlave(dev, ipcPipes, readyInfo, monitorPipe)
    end
 
    local lastAckTime = dpdk.getTime()
-   while dpdk.running() do      
-      do -- (get start messages)
-	 --dataMod.txlog("get start msgs")
-	 local now = dpdk.getTime()	 
-	 local msgs = ipc.acceptFcdStartMsgs(ipcPipes)
-	 --if next(msgs) == nil then dataMod.txlog("Got no messages from ipcPipes") end
-	 for _, msg in ipairs(msgs) do
-	    local q = msg.queue
-	    queueInfo[q].flow = msg.flow
-	    queueInfo[q].ethSrc = msg.ethSrc
-	    queueInfo[q].ethDst = msg.ethDst
-	    queueInfo[q].percgSrc = msg.percgSrc
-	    queueInfo[q].percgDst = msg.percgDst -- actually device id only
-	    queueInfo[q].size = msg.size
-	    queueInfo[q].sent = 0
-	    queueInfo[q].acked = 0
-	    queueInfo[q].active = true
-	    queueInfo[q].acked_time = now
-	    dataMod.txlog("Starting a queue for " .. msg.flow
-			     .. " ethSrc " ..tostring(queueInfo[q].ethSrc)
-			     .. " ethDst " ..tostring(queueInfo[q].ethDst)
-			     .. " percgSrc " ..tostring(queueInfo[q].percgSrc)
-			     .. " percgDst " ..tostring(queueInfo[q].percgDst)
-			      .. " size " .. tostring(queueInfo[q].size)
-			      .. " sent " .. tostring(queueInfo[q].sent)
-			      .. " acked " .. tostring(queueInfo[q].acked)
-			      .. " active " .. tostring(queueInfo[q].active)
-			      .. " acked_time " .. tostring(queueInfo[q].acked_time))
-	 end
+   local lastPeriodicTime = dpdk.getTime()
+   local nextSendTime =  dpdk.getTime() + 0.1
+   local nextFlowId = 1
+
+   local numStarted = 0
+   local numFinished = 0
+
+   while dpdk.running() and numFinished < numFlows do      
+      local dpdkNow = dpdk.getTime()	 
+
+      if dpdkNow > nextSendTime and nextFlowId <= numFlows then
+	 -- (get start messages)
+	 nextSendTime = dpdkNow	+ 0.001
+	 numStarted = numStarted + 1
+	 local size = math.ceil(flowSizes:value()/1500.0)
+	 local flow = nextFlowId
+	 local percgDst = 1
+	 assert(next(freeQueues) ~= nil)
+	 local q = table.remove(freeQueues)
+	 queueInfo[q].flow = flow
+	 queueInfo[q].ethSrc = ethSrc
+	 queueInfo[q].ethDst = ethDst
+	 queueInfo[q].percgSrc = percgSrc
+	 queueInfo[q].percgDst = percgDst -- actually device id only
+	 queueInfo[q].size = size
+	 queueInfo[q].sent = 0
+	 queueInfo[q].acked = 0
+	 queueInfo[q].active = true
+	 queueInfo[q].acked_time = dpdkNow
+	 queueInfo[q].start_time = dpdkNow
+	 log:info("flow " .. tostring(flow)
+		     .. " started (queue " .. tostring(q) .. ")")
+	 nextFlowId = nextFlowId + 1
       end -- ends do (get start messages)
 
       do -- (send data packets)
-	 --dataMod.txlog("send data packets")
-	 -- local now = dpdk.getTime()	 
 	 for q=1,perc_constants.MAX_QUEUES do
 	    assert(queueInfo[q].size >= queueInfo[q].sent)
-	    if queueInfo[q].active and queueInfo[q].sent < queueInfo[q].size then
-	       if queueInfo[q].sent + 63ULL > queueInfo[q].size then 
-		  txBufs[q]:allocN(
-		     DATA_PACKET_SIZE,
-		     tonumber((queueInfo[q].size - queueInfo[q].sent)))
+	    if queueInfo[q].active
+	    and queueInfo[q].sent < queueInfo[q].size then
+	       local remaining = queueInfo[q].size - queueInfo[q].sent
+	       if (remaining < txBufs[q].maxSize)
+	       then
+		  txBufs[q]:allocN(DATA_PACKET_SIZE, remaining)
 	       else
-		  txBufs[q]:alloc(DATA_PACKET_SIZE)
-	       end	       
-	       dataMod.txlog(
-		  "queue " .. q
-		     .. " is active and has"
-		     .. " sent " .. tostring(queueInfo[q].sent)
-		     .. " of size " .. tostring(queueInfo[q].size)
-		     .. " so toSend " .. tostring(txBufs[q].size)
-		     .. " packets of " .. tostring(queueInfo[q].flow))
-
+		  txBufs[q]:allocN(DATA_PACKET_SIZE, txBufs[q].maxSize)
+	       end
 	       for _, buf in ipairs(txBufs[q]) do
 		  local pkt = buf:getPercgPacket()
 		  pkt.percg:setSource(queueInfo[q].percgSrc)
 		  pkt.percg:setDestination(queueInfo[q].percgDst)
-
 		  pkt.eth:setSrc(queueInfo[q].ethSrc)
-		  pkt.eth:setDst(queueInfo[q].ethDst)
-		  
+		  pkt.eth:setDst(queueInfo[q].ethDst)		  
 		  pkt.percg:setFlowId(queueInfo[q].flow) -- 32b -> 16b
 		  pkt.payload.uint64[0] = queueInfo[q].flow
 		  pkt.payload.uint64[1] = q
-		  -- pkt.payload.uint64[2] = queueInfo[q].sent
-		  -- pkt.payload.uint64[3] =
-		  --    pkt.payload.uint64[0]
-		  --    + pkt.payload.uint64[1]
-		  --    + pkt.payload.uint64[2]
 		  pkt.payload.uint64[4] = queueInfo[q].size
 		  pkt.eth:setSrc(q)
 		  pkt.eth:setType(eth.TYPE_PERC_DATA)
 		  queueInfo[q].sent = queueInfo[q].sent + 1		  
 	       end
+	       txCtr:update()
 	       txQueues[q]:send(txBufs[q])
-
-	       -- if (queueInfo[q].sent == queueInfo[q].size) then
-	       -- 	  ipc.sendFdcFinMsg(
-	       -- 	     ipcPipes, tonumber(queueInfo[q].flow), now)
-	       -- end
 	    end
 	 end  -- ends for q=1,perc_constants.MAX_QUEUES
-	 txCtr:update()
       end  -- ends do (send data packets)
       
       do -- (receive acks)
-	 --dataMod.txlog("receive acks")
 	 local now = dpdk.getTime()
 	 local rx = rxQueue:tryRecv(rxBufs, 20)
 	 for b = 1 , rx do
@@ -319,60 +347,44 @@ function dataMod.txSlave(dev, ipcPipes, readyInfo, monitorPipe)
 	    local flow = pkt.payload.uint64[0]
 	    local q = pkt.payload.uint64[1]
 	    local acked = pkt.payload.uint64[2]
-	    -- local checksumRx = pkt.payload.uint64[3]
-	    -- local checksumC = pkt.payload.uint64[0] + pkt.payload.uint64[1] + pkt.payload.uint64[2]
-	    -- if (checksumRx ~= checksumC) then
-	    --    dataMod.warn(
-	    -- 	  "checksum doesn't match recvd for ack "
-	    -- 	     .. pkt:getString())
-	    -- end
-	    -- assert(checksumRx == checksumC)
 	    if (queueInfo[q].active
 		   and queueInfo[q].flow == flow
-		and pkt.payload.uint64[2] > queueInfo[q].acked) then	       
+		and pkt.payload.uint64[2] > queueInfo[q].acked) then    
 	       queueInfo[q].acked = pkt.payload.uint64[2]
 	       queueInfo[q].acked_time = now
 	       assert(queueInfo[q].acked <= queueInfo[q].size)
-	    else
-	       assert(false)
-	       -- dataMod.warn(
-	       -- "tx got ack for inactive queue "
-	       --  .. q .. ", flow " .. flow
-	       --  .. "acked " .. acked)
+	       if (queueInfo[q].acked == queueInfo[q].size) then
+		  queueInfo[q].active = false
+		  table.insert(freeQueues, q)
+		  local fct = queueInfo[q].acked_time - queueInfo[q].start_time
+		  log:info("flow " .. tostring(queueInfo[q].flow)
+			      .. " ended (queue " .. tostring(q) .. ")"
+			      .. " fct: " .. tostring(fct)
+			      .. " size: " .. tostring(queueInfo[q].size)
+			      .. " acked: " .. tostring(queueInfo[q].acked))
+		  numFinished = numFinished + 1
+	       end
 	    end
 	 end
 	 rxBufs:freeAll()
       end -- ends do (receive acks)
 
       -- timeout flows that haven't received acks in a while
-      do
-	 local now = dpdk.getTime()
-      	 if now > lastAckTime + perc_constants.tx_ack_timeout then 
-      	    for q=1,perc_constants.MAX_QUEUES do
-	       if queueInfo[q].active and
-		  lastAckTime > tonumber(queueInfo[q].acked_time) then
-		     local logFunc = dataMod.txlog
-		     if queueInfo[q].acked == 0 then
-			logFunc = dataMod.warn
-		     end
-		     logFunc("sending fin-ack for "
-				.. tostring(queueInfo[q].flow)
-				.. " acked "
-				.. tostring(queueInfo[q].acked)
-				.. " of " .. tostring(queueInfo[q].size)
-				.. " packets.")		  
-	       
-		     ipc.sendFdcFinAckMsg(ipcPipes,
-					  tonumber(queueInfo[q].flow),
-					  tonumber(queueInfo[q].acked),
-					  tonumber(queueInfo[q].acked_time))
-		     queueInfo[q].active = false
-	       end --  ends if queue.. active
-	    end -- ends for q=1,..
-	    lastAckTime = now	 
-	 end  -- ends if now > lastAckTime + ..	 
-      end -- ends do (forward acks)
-     
+      if dpdkNow > lastAckTime + 1 then
+	 lastAckTime = dpdkNow
+	 for q=1,perc_constants.MAX_QUEUES do
+	    if queueInfo[q].active and
+	       (lastAckTime > tonumber(queueInfo[q].acked_time)
+		or queueInfo[q].size == queueInfo[q].acked) then
+		  log:info("flow " .. tostring(queueInfo[q].flow)
+			       .. " timed out (queue " .. q .. ")")
+		  queueInfo[q].active = false
+		  table.insert(freeQueues, q)
+		  numFinished = numFinished + 1
+	    end 
+	 end -- ends for q=1,..
+      end -- ends do
+      
    end -- ends while dpdk.running()
    txCtr:finalize()
 end
