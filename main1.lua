@@ -16,12 +16,21 @@ local fsd = require "examples.perc-moongen-single.flow-size-distribution"
 local data = require "examples.perc-moongen-single.data1"
 
 
-function master(txPort, rxPort, cdfFilepath, numFlows)
-   if not txPort or not rxPort or not cdfFilepath or not numFlows then
-      return log:info("usage: txPort rxPort cdfFilepath numFlows")
+function master(mode, cdfFilepath, scaling, numFlows)
+   if not mode or not cdfFilepath or not scaling  or not numFlows then
+      return log:info("usage: single/multi cdfFilepath scaling numFlows\n"
+			 .. " multi -> port 0 and 1 sending to 2 and 3"
+			 .. ", single -> port 0 sending to port 1\n"
+			 .. " scaling = 0.1 -> flows are ten times shorter")
    end
    
+   if mode == "single" then singleConnection(cdfFilepath, scaling, numFlows)
+   else multiConnection(cdfFilepath, scaling, numFlows) end
+end
 
+function singleConnection(cdfFilepath, scaling, numFlows)
+   local txPort = 0
+   local rxPort = 1
    -- local macAddrType = ffi.typeof("union mac_address")	
    local txDev = device.config{port = txPort,
 			       rxQueues = 5,
@@ -52,16 +61,13 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
    rxDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
 
    dpdk.setRuntime(5)
-   local txIpcPipes = ipc.getInterVmPipes()
-   local rxIpcPipes = ipc.getInterVmPipes()
-   local monitorPipes = monitor.getPerVmPipes({txPort, rxPort})
    local readyPipes = ipc.getReadyPipes(2)
    local tableDst = {}
    tableDst[txPort] = txPort
    tableDst[rxPort] = rxPort
    
    dpdk.launchLua("loadDataSlave", txDev, cdfFilepath,
-		  numFlows, txPort, txPort,
+		  scaling, numFlows, txPort, txPort,
 		  tableDst,
 		  true, false,
 		  readyPipes, 1)
@@ -73,7 +79,7 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
    -- 		  readyPipes, 2)
 
    dpdk.launchLua("loadDataSlave", rxDev, nil,
-   		  nil, rxPort, rxPort,
+   		  nil, nil, rxPort, rxPort,
    		  nil,
    		  false, true,
    		  readyPipes, 2)
@@ -88,15 +94,15 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
 end
 
 function loadDataSlave(dev, cdfFilepath, numFlows,
-		       percgSrc, ethSrc, tableDst,
+		       scaling, percgSrc, ethSrc, tableDst,
 		       isSending, isReceiving,
 		       readyPipes, id)
    local readyInfo = {["pipes"]=readyPipes, ["id"]=id}
    print(readyInfo.id)
    if tableDst ~= nil and percgSrc ~= nil then   
       tableDst[percgSrc] = nil end
-   data.txSlave(dev, cdfFilepath, numFlows,
-		percgSrc, ethSrc, tableDst,
+   data.dataSlave(dev, cdfFilepath, numFlows,
+		scaling, percgSrc, ethSrc, tableDst,
 		isSending, isReceiving,
 		readyInfo)		
 end

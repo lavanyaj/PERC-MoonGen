@@ -202,7 +202,7 @@ function senderControlProcess(pkt, queueInfo, dpdkNow)
 end
 
 -- sends data packets and receives acks
-function dataMod.txSlave(dev, cdfFilepath, numFlows,
+function dataMod.dataSlave(dev, cdfFilepath, scaling, numFlows,
 			 percgSrc, ethSrc,
 			 tableDst, 
 			 isSending, isReceiving,
@@ -263,7 +263,8 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
       local avgFlowSize = flowSizes:avg()
       assert(avgFlowSize > 0)
       log:info("loaded flow sizes file with avg. flow size "
-		  .. tostring(avgFlowSize/1500) .. " packets.\n")
+		  .. tostring(avgFlowSize/1500) .. " packets, will scale by "
+		  .. tostring(scaling))
 
       percgDst, ethDst = next(tableDst)
       if type(ethDst) == "number" then
@@ -428,7 +429,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 	       -- (get start messages)
 	       nextSendTime = dpdkNow	+ perc_constants.inter_arrival_time
 	       numStarted = numStarted + 1
-	       local size = math.ceil(flowSizes:value()/1500.0)
+	       local size = math.ceil((flowSizes:value() * scaling)/1500.0)
 	       local flow = nextFlowId
 	       local percgDst = 1
 	       assert(next(freeQueues) ~= nil)
@@ -462,14 +463,14 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 	       queueInfo[q].ethDst = pkt.eth.dst
 	       link:processPercc1Packet(pkt)
 	       -- stored in host or network order??
-	       if (true) then
-	       	  print("dev " .. dev.id .. " sent new control packet from "
-	       		   .. pkt.eth:getSrcString()
-	       		   .. " to " .. pkt.eth:getDstString()
-	       		   .. " of type " .. pkt.eth:getType()
-	       		   .. ", hops: " .. pkt.percc1:getHop()
-	       		   .. ", maxHops: " .. pkt.percc1:getMaxHops())
-	       end		    
+	       -- if (true) then
+	       -- 	  print("dev " .. dev.id .. " sent new control packet from "
+	       -- 		   .. pkt.eth:getSrcString()
+	       -- 		   .. " to " .. pkt.eth:getDstString()
+	       -- 		   .. " of type " .. pkt.eth:getType()
+	       -- 		   .. ", hops: " .. pkt.percc1:getHop()
+	       -- 		   .. ", maxHops: " .. pkt.percc1:getMaxHops())
+	       -- end		    
 	       pkt.percc1:doHton()
 	       txQueues[perc_constants.NEW_CONTROL_TXQUEUE]:send(cNewBufs)
 	       nextFlowId = nextFlowId + 1
@@ -522,7 +523,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 		     -- TODO: check it's passed by ref
 		     senderControlProcess(pkt, qi, dpdkNow) -- At this point sender sets packet direction forward
 		     if qi ~= nil and qi.nextRate ~= -1 and qi.changeTime <= dpdkNow then
-			log:info("setting rate of flow " .. tostring(qi.flow) .. " to " .. qi.nextRate)
+			--log:info("setting rate of flow " .. tostring(qi.flow) .. " to " .. qi.nextRate)
 			txQueues[q]:setRate(qi.nextRate)
 			qi.currentRate = qi.nextRate
 			qi.nextRate = -1
@@ -535,14 +536,14 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 		     end
 		  end -- ends IFSENDING
 	       end
-	       if (true) then
-	       	  print("dev " .. dev.id .. " echoed control packet from "
-	       		   .. pkt.eth:getSrcString()
-	       		   .. " to " .. pkt.eth:getDstString()
-	       		   .. " of type " .. pkt.eth:getType()
-	       		   .. ", hops: " .. pkt.percc1:getHop()
-	       		   .. ", maxHops: " .. pkt.percc1:getMaxHops())
-	       end
+	       -- if (true) then
+	       -- 	  print("dev " .. dev.id .. " echoed control packet from "
+	       -- 		   .. pkt.eth:getSrcString()
+	       -- 		   .. " to " .. pkt.eth:getDstString()
+	       -- 		   .. " of type " .. pkt.eth:getType()
+	       -- 		   .. ", hops: " .. pkt.percc1:getHop()
+	       -- 		   .. ", maxHops: " .. pkt.percc1:getMaxHops())
+	       -- end
 	       pkt.percc1:doHton()
 	    end
 	    txQueues[perc_constants.CONTROL_TXQUEUE]:sendN(cBufs, rx)
