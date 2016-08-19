@@ -16,9 +16,9 @@ constantsMod = {
    ["ACK_TXQUEUE"] = 3,
    ["DROP_QUEUE"] = 4,
    ["MAX_QUEUES"] = 60,
-   ["inter_arrival_time"] = 0.1,
-   ["tx_ack_timeout"] = 2 * (0.1),
-   ["rtts"] = 0.0001,
+   ["inter_arrival_time"] = 0.005, -- 10ms
+   ["tx_ack_timeout"] = 20 * (0.1),
+   ["rtts"] = 0.0005,
    ["startRate"] = 11, -- Mb/s
    -- device id to mac address mapping (based on FPGA routing
    -- and wiring as on 8/18 on DCA server)
