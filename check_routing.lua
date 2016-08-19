@@ -16,6 +16,7 @@ local ethAddr = {
    ["3"] = "0c:22:22:22:22:22",
 }
 
+--sudo build/MoonGen examples/*single/check_routing.lua 0 "0c:11:11:11:11:11"
 function master(txPort, ethDstAddr)
    if not txPort or not ethDstAddr then
       return log:info("usage: txPort ethDstAddr")
@@ -23,16 +24,18 @@ function master(txPort, ethDstAddr)
 
    local rxDevs = {}
    for i = 0, 3 do
-      rxDevs[i] = device.config{port = i}
+      rxDevs[i] = device.config{port = i, rxQueues = 5}
    end
    local txDev = rxDevs[txPort]   
-	
+    rxDevs[2]:l2Filter(0x0708, 3)
+    rxDevs[3]:l2Filter(0x0708, 3)
+
    mg.launchLua("txSlave", txDev, ethDstAddr)
 
-   mg.launchLua("rxSlave", rxDevs[0]:getRxQueue(0))
-   mg.launchLua("rxSlave", rxDevs[1]:getRxQueue(0))
-   mg.launchLua("rxSlave", rxDevs[2]:getRxQueue(0))
-   mg.launchLua("rxSlave", rxDevs[3]:getRxQueue(0))
+   --mg.launchLua("rxSlave", rxDevs[0]:getRxQueue(0))
+   --mg.launchLua("rxSlave", rxDevs[1]:getRxQueue(0))
+   mg.launchLua("rxSlave", rxDevs[2]:getRxQueue(3))
+   mg.launchLua("rxSlave", rxDevs[3]:getRxQueue(3))
    
    mg.waitForSlaves()
 end
@@ -56,6 +59,7 @@ function txSlave(dev, ethDstAddr)
       for _, buf in ipairs(bufs) do
 	 local pkt = buf:getUdpPacket()
 	 pkt.eth:setDstString(ethDstAddr)
+	 pkt.eth:setType(0x0708)
 	 --assert(pkt.eth:getDst() == ethDstAddr)
       end
 

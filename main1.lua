@@ -8,7 +8,7 @@ local log = require "log"
 local pipe		= require "pipe"
 local eth = require "proto.ethernet"
 
-local perc_constants = require "examples.perc-moongen-single.constants"
+local perc_constants = require "examples.perc-moongen-single.constants-han1"
 local monitor = require "examples.perc-moongen-single.monitor"
 local ipc = require "examples.perc-moongen-single.ipc"
 local fsd = require "examples.perc-moongen-single.flow-size-distribution"
@@ -24,10 +24,10 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
 
    -- local macAddrType = ffi.typeof("union mac_address")	
    local txDev = device.config{port = txPort,
-			       rxQueues = 4,
+			       rxQueues = 5,
 			       txQueues = perc_constants.MAX_QUEUES+1}
    local rxDev = device.config{port = rxPort,
-			       rxQueues = 4,
+			       rxQueues = 5,
 			       txQueues = perc_constants.MAX_QUEUES+1}
    
 	-- filters for data packets
@@ -45,7 +45,7 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
    local txIpcPipes = ipc.getInterVmPipes()
    local rxIpcPipes = ipc.getInterVmPipes()
    local monitorPipes = monitor.getPerVmPipes({txPort, rxPort})
-   local readyPipes = ipc.getReadyPipes(4)
+   local readyPipes = ipc.getReadyPipes(2)
    local tableDst = {}
    tableDst[txPort] = txPort
    tableDst[rxPort] = rxPort
@@ -56,23 +56,17 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
 		  true, false,
 		  readyPipes, 1)
 
-   dpdk.launchLua("loadDataSlave", txDev, nil,
-		  nil, txPort, txPort,
-		  nil,
-		  false, true,
-		  readyPipes, 2)
-
-   dpdk.launchLua("loadDataSlave", rxDev, cdfFilepath,
-		  numFlows, rxPort, rxPort,
-		  tableDst,
-		  true, false,
-		  readyPipes, 3)
+   -- dpdk.launchLua("loadDataSlave", rxDev, cdfFilepath,
+   -- 		  numFlows, rxPort, rxPort,
+   -- 		  tableDst,
+   -- 		  true, false,
+   -- 		  readyPipes, 2)
 
    dpdk.launchLua("loadDataSlave", rxDev, nil,
-		  nil, rxPort, rxPort,
-		  nil,
-		  false, true,
-		  readyPipes, 4)
+   		  nil, rxPort, rxPort,
+   		  nil,
+   		  false, true,
+   		  readyPipes, 2)
 
    -- dpdk.launchLua("loadDataSlave", rxDev, nil,
    -- 		  nil, rxPort, rxPort,
@@ -89,6 +83,8 @@ function loadDataSlave(dev, cdfFilepath, numFlows,
 		       readyPipes, id)
    local readyInfo = {["pipes"]=readyPipes, ["id"]=id}
    print(readyInfo.id)
+   if tableDst ~= nil and percgSrc ~= nil then   
+      tableDst[percgSrc] = nil end
    data.txSlave(dev, cdfFilepath, numFlows,
 		percgSrc, ethSrc, tableDst,
 		isSending, isReceiving,

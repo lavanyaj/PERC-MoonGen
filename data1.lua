@@ -18,7 +18,7 @@ local eth = require "proto.ethernet"
 
 local ipc = require "examples.perc-moongen-single.ipc"
 local monitor = require "examples.perc-moongen-single.monitor"
-local perc_constants = require "examples.perc-moongen-single.constants"
+local perc_constants = require "examples.perc-moongen-single.constants-han1"
 
 local CONTROL_PACKET_SIZE = perc_constants.CONTROL_PACKET_SIZE
 local DATA_PACKET_SIZE	= perc_constants.DATA_PACKET_SIZE
@@ -176,10 +176,14 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
    local thisCore = dpdk.getCore()   
 
    if type(ethSrc) == "number" then
-      local buf = ffi.new("char[20]")
-      dpdkc.get_mac_addr(ethSrc, buf)
-      local ethSrcStr = ffi.string(buf)      
+      --local buf = ffi.new("char[20]")
+      --dpdkc.get_mac_addr(ethSrc, buf)
+      local ethSrcStr = perc_constants["ethAddrStr"..ethSrc]	
+      assert(ethSrcStr ~= nil)
+      --ffi.string(buf)      
       ethSrc = parseMacAddress(ethSrcStr)
+      if (ethSrc == nil) then log:warn("couldn't parse " .. ethSrcStr) end
+      assert(ethSrc ~= nil)
    elseif istype(macAddrType, ethSrc) then
       ethSrc = ethSrc
    else
@@ -187,12 +191,12 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
    end
 
    log:info("Data slave running on "
-		.. " dev " .. dev.id 
-		.. " MAC addr " .. tostring(ethSrc)
-		.. ", core " .. thisCore
-		.. ", isSending " .. tostring(isSending)
-		.. ", isReceiving " .. tostring(isReceiving)
-		.. "\n")
+	       .. " dev " .. dev.id 
+	       .. " MAC addr " .. tostring(ethSrc)
+	       .. ", core " .. thisCore
+	       .. ", isSending " .. tostring(isSending)
+	       .. ", isReceiving " .. tostring(isReceiving)
+	       .. "\n")
 
    if isSending == false then
       assert(cdfFilepath == nil)
@@ -229,9 +233,10 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 
       percgDst, ethDst = next(tableDst)
       if type(ethDst) == "number" then
-	 local buf = ffi.new("char[20]")
-	 dpdkc.get_mac_addr(ethDst, buf)
-	 local ethDstStr = ffi.string(buf)      
+	 --local buf = ffi.new("char[20]")
+	 --dpdkc.get_mac_addr(ethDst, buf)
+	 local ethDstStr = perc_constants["ethAddrStr"..ethDst]
+	 -- ffi.string(buf)      
 	 ethDst = parseMacAddress(ethDstStr)
       elseif istype(macAddrType, ethDst) then
 	 ethDst = ethDst
@@ -409,24 +414,37 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 	       queueInfo[q].currentRate = dev:getTxQueue(q):getTxRate()
 	       queueInfo[q].nextRate = -1
 	       queueInfo[q].changeTime = -1
-	       --log:info("flow " .. tostring(flow)
-	       --	   .. " started (queue " .. tostring(q) .. ")")
+	       log:info("flow " .. tostring(flow)
+			   .. " started (queue " .. tostring(q) .. ")")
 
 
 	       -- send  a new control packet
 	       cNewBufs:alloc(1)
 	       initializePercc1Packet(cNewBufs[1], percgSrc, ethSrc,
 				      percgDst, ethDst, flow)
+	       if (true) then
+		  local pkt = cNewBufs[1]:getPercc1Packet()
+		  print("dev " .. dev.id .. " sent control packet from "
+			   .. pkt.eth:getSrcString()
+			   .. " to " .. pkt.eth:getDstString())
+	       end		    
+
 	       txQueues[perc_constants.NEW_CONTROL_TXQUEUE]:send(cNewBufs)
 	       nextFlowId = nextFlowId + 1
 	    end -- ends do (get start messages)
-	 end
+	 end -- ends IFSENDING
 
 	 do -- receive control packets, process and send back
-	    local rx = cRxQueue:tryRecv(cBufs, 20)
+	    local rx = cRxQueue:tryRecv(cBufs, 100)
 	    for b = 1, rx do
-	       local pkt = cBufs[b].getPercc1Packet()
+	       local pkt = cBufs[b]:getPercc1Packet()
 	       pkt.percc1:doNtoh()
+	       if (true or b==1) then
+		  print("dev " .. dev.id .. " got control packet from "
+			   .. pkt.eth:getSrcString()
+			   .. " to " .. pkt.eth:getDstString())
+	       end		    
+
 	       link:processPercc1Packet(pkt)
 	       if pkt.percc1:IsForward() then receiverControlProcess(pkt)
 	       else
@@ -447,7 +465,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 			qi.changeTime = -1
 		     end
 		     link:processPercc1Packet(pkt)
-		  end
+		  end -- ends IFSENDING
 	       end
 	       pkt.percc1:doHton()
 	    end
@@ -467,7 +485,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 		     else
 			txBufs[q]:allocN(DATA_PACKET_SIZE, txBufs[q].maxSize)
 		     end
-		     for _, buf in ipairs(txBufs[q]) do
+		     for bufNo, buf in ipairs(txBufs[q]) do
 			local pkt = buf:getPercgPacket()
 			pkt.percg:setSource(queueInfo[q].percgSrc)
 			pkt.percg:setDestination(queueInfo[q].percgDst)
@@ -477,13 +495,16 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 			pkt.payload.uint64[0] = queueInfo[q].flow
 			pkt.payload.uint64[1] = q
 			pkt.payload.uint64[4] = queueInfo[q].size
-			pkt.eth:setSrc(q)
 			pkt.eth:setType(eth.TYPE_PERC_DATA)
-			queueInfo[q].sent = queueInfo[q].sent + 1		  
-		     end
+			queueInfo[q].sent = queueInfo[q].sent + 1					if (false and bufNo == 1) then
+			   print("dev " .. dev.id .. " sent data packet from "
+				    .. pkt.eth:getSrcString()
+				    .. " to " .. pkt.eth:getDstString())
+													end
+		     end -- ends for bufNo,..
+		     -- txQueues[q]:send(txBufs[q])
 		     --txCtr:update()
-		     txQueues[q]:send(txBufs[q])
-		  end
+		  end -- ends if active
 	       end  -- ends for q=1,perc_constants.MAX_QUEUES
 	    end  -- ends do (send data packets)
 	    
@@ -495,6 +516,12 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 		  local flow = pkt.payload.uint64[0]
 		  local q = pkt.payload.uint64[1]
 		  local acked = pkt.payload.uint64[2]
+		  if (b==1) then
+		     print("dev " .. dev.id .. " got ack packet from "
+			      .. pkt.eth:getSrcString()
+			      .. " to " .. pkt.eth:getDstString())
+		  end		    
+
 		  if (queueInfo[q].active
 			 and queueInfo[q].flow == flow
 		      and pkt.payload.uint64[2] > queueInfo[q].acked) then    
@@ -514,7 +541,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 		     end
 		  end
 	       end
-	       rxCtr:update()
+	       --rxCtr:update()
 	       ackRxBufs:freeAll()
 	    end -- ends do (receive acks)
 	    
@@ -533,7 +560,7 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 		  end 
 	       end -- ends for q=1,..
 	    end -- ends do
-	 end
+	 end -- ends IFSENDING
 
 
 	 if isReceiving then
@@ -548,6 +575,11 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 		     local flow = pkt.payload.uint64[0]
 		     local q = pkt.payload.uint64[1]
 		     local size = pkt.payload.uint64[4]
+		     if (false) then
+			print("dev " .. dev.id .. " got data packet from "
+				 .. pkt.eth:getSrcString()
+				 .. " to " .. pkt.eth:getDstString())
+		     end		    
 		     if rxQueueInfo[q].flow ~= flow then
 			rxQueueInfo[q].flow = flow 
 			rxQueueInfo[q].recv = 0ULL
@@ -566,13 +598,14 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 		     end
 		     local recvd = rxQueueInfo[q].recv
 		     local total = rxQueueInfo[q].size
-		     if(recvd > total) then log:warn("for flow " .. tostring(flow)
-							.. " recvd " .. tostring(recvd)
-							.. " more than size " .. tostring(size)) end
+		     if(recvd > total) then 
+			log:warn("for flow " .. tostring(flow)
+				    .. " recvd " .. tostring(recvd)
+				 .. " more than size " .. tostring(size)) end
 		     assert(rxQueueInfo[q].recv <= rxQueueInfo[q].size)	    
 		  end
 		  if rx > 0 then
-		     rxCtr:update()
+		     --rxCtr:update()
 		     dataRxBufs:freeAll()
 		  end	 
 	       end      
@@ -604,21 +637,26 @@ function dataMod.txSlave(dev, cdfFilepath, numFlows,
 				 + pkt.payload.uint64[1] + rxQueueInfo[q].recv
 			      pkt.payload.uint64[4] = rxQueueInfo[q].size
 			      pkt.eth:setType(eth.TYPE_ACK)
-			      pkt.eth:setSrc(perc_constants.ACK_TXQUEUE)
+			      pkt.eth:setSrc(rxQueueInfo[q].ethDst)
 			      pkt.eth:setDst(rxQueueInfo[q].ethSrc)
 			      pkt.percg:setSource(rxQueueInfo[q].percgDst)
 			      pkt.percg:setDestination(rxQueueInfo[q].percgSrc)
+			      if (b==1) then
+				 print("dev " .. dev.id ..  " sent ack packet from "
+					  .. pkt.eth:getSrcString()
+					  .. " to " .. pkt.eth:getDstString())
+			      end		    
 			   end
 			end
 			--txCtr:update()
 			txQueues[perc_constants.ACK_TXQUEUE]:send(ackTxBufs)
-		     end
-		  end -- ends if newAcks > 0
-	       end -- ends do for sending ACKs
-	    end -- ends fo for receiving data and sending ACKs
-	 end -- ends if Receiving
-   end -- ends while dpdk.running()
-   rxCtr:finalize()
+		     end -- ends if newAcks > 0	     
+		  end -- ends do for sending ACKs
+	       end -- ends fo for receiving data and sending ACKs
+	    end -- ends if Receiving
+	 end -- ends while dpdk.running()
+   end
+   --rxCtr:finalize()
    --txCtr:finalize()
 end
 
