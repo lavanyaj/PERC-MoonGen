@@ -17,7 +17,6 @@ local percc1 = require "proto.percc1"
 local eth = require "proto.ethernet"
 
 local ipc = require "examples.perc-moongen-single.ipc"
-local monitor = require "examples.perc-moongen-single.monitor"
 local perc_constants = require "examples.perc-moongen-single.constants-han1"
 
 local CONTROL_PACKET_SIZE = perc_constants.CONTROL_PACKET_SIZE

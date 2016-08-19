@@ -9,7 +9,6 @@ local pipe		= require "pipe"
 local eth = require "proto.ethernet"
 
 local perc_constants = require "examples.perc-moongen-single.constants-han1"
-local monitor = require "examples.perc-moongen-single.monitor"
 local ipc = require "examples.perc-moongen-single.ipc"
 local fsd = require "examples.perc-moongen-single.flow-size-distribution"
 
