@@ -37,9 +37,19 @@ function master(txPort, rxPort, cdfFilepath, numFlows)
    -- filters for control packets
    txDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
    rxDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
+   log:info("filter packets with ethType "
+	       .. eth.TYPE_PERCG .. " to rx queue "
+	       .. perc_constants.CONTROL_RXQUEUE .. " on device " .. txDev.id
+	       .. ", " .. eth.TYPE_PERCG .. " to rx queue "
+	       .. perc_constants.CONTROL_RXQUEUE .. " on device " .. rxDev.id)
+
+   
    rxDev:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
    txDev:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
-   
+
+   -- rate limit control packets
+   txDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
+   rxDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
 
    dpdk.setRuntime(5)
    local txIpcPipes = ipc.getInterVmPipes()

@@ -23,19 +23,23 @@ function master(txPort, ethDstAddr)
    end
 
    local rxDevs = {}
-   for i = 0, 3 do
-      rxDevs[i] = device.config{port = i, rxQueues = 5}
-   end
-   local txDev = rxDevs[txPort]   
-    rxDevs[2]:l2Filter(0x0708, 3)
-    rxDevs[3]:l2Filter(0x0708, 3)
-
+   rxDevs[1] = device.config{port = 0, rxQueues = 2}
+   rxDevs[2] = device.config{port = 1, rxQueues = 2}
+   rxDevs[3] = device.config{port = 2, rxQueues = 2}
+   rxDevs[4] = device.config{port = 3, rxQueues = 2}
+   
+   local txDev = rxDevs[txPort+1]
+   rxDevs[1]:l2Filter(0x0708, 1)
+   rxDevs[2]:l2Filter(0x0708, 1)
+   rxDevs[3]:l2Filter(0x0708, 1)
+   rxDevs[4]:l2Filter(0x0708, 1)
+   
    mg.launchLua("txSlave", txDev, ethDstAddr)
 
    --mg.launchLua("rxSlave", rxDevs[0]:getRxQueue(0))
    --mg.launchLua("rxSlave", rxDevs[1]:getRxQueue(0))
-   mg.launchLua("rxSlave", rxDevs[2]:getRxQueue(3))
-   mg.launchLua("rxSlave", rxDevs[3]:getRxQueue(3))
+   mg.launchLua("rxSlave", rxDevs[2]:getRxQueue(1))
+   mg.launchLua("rxSlave", rxDevs[3]:getRxQueue(1))
    
    mg.waitForSlaves()
 end
@@ -60,6 +64,12 @@ function txSlave(dev, ethDstAddr)
 	 local pkt = buf:getUdpPacket()
 	 pkt.eth:setDstString(ethDstAddr)
 	 pkt.eth:setType(0x0708)
+	 if (false) then
+	    print("dev " .. dev.id .. " sent 0x0708 packet from "
+		     .. pkt.eth:getSrcString()
+		     .. " to " .. pkt.eth:getDstString()
+		     .. " of type " .. pkt.eth:getType())
+	    end
 	 --assert(pkt.eth:getDst() == ethDstAddr)
       end
 
@@ -87,7 +97,6 @@ function rxSlave(queue)
 		 recvd = true
 	      end
 	   end
-
 	   bufs:freeAll()
 	end
 
