@@ -184,7 +184,7 @@ function senderControlProcess(pkt, queueInfo, dpdkNow)
 end
 
 -- sends data packets and receives acks
-function dataMod.dataSlave(dev, cdfFilepath, scaling, numFlows,
+function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows,
 			 percgSrc, ethSrc,
 			 tableDst, 
 			 isSending, isReceiving,
@@ -384,7 +384,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, numFlows,
 
       lastAckTime = dpdk.getTime()
       lastPeriodicTime = dpdk.getTime()
-      nextSendTime =  dpdk.getTime() + perc_constants.inter_arrival_time
+      nextSendTime =  dpdk.getTime() + interArrivalTime
       nextFlowId = 1
       
       numStarted = 0
@@ -409,7 +409,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, numFlows,
 	    if dpdkNow > nextSendTime and nextFlowId <= numFlows then
 	       -- print("core " .. thisCore .. " starting flow # " .. nextFlowId)
 	       -- (get start messages)
-	       nextSendTime = dpdkNow	+ perc_constants.inter_arrival_time
+	       nextSendTime = dpdkNow	+ interArrivalTime
 	       numStarted = numStarted + 1
 	       local size = math.ceil((flowSizes:value() * scaling)/1500.0)
 	       local flow = nextFlowId
