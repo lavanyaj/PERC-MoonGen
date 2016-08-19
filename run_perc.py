@@ -4,16 +4,35 @@
 import os
 import subprocess
 import sys
+import time
+
+import argparse
+
+parser = argparse.ArgumentParser(description='Run Perc')
+
+parser.add_argument('--mode', type=str, help='setup: single for 1:1, multi for 2:2', default='single')
+parser.add_argument('--numFlows', type=int, default=1000)
+parser.add_argument('--scaling', type=float, default=1.0)
+parser.add_argument('--rtt', type=float, default=0.0001)
+parser.add_argument('--moongenDir', type=str, default="/home/lavanyaj/MoonGen")
+parser.add_argument('--percswitchDir', type=str, default="/home/lavanyaj/perc_switch")
+
+args = parser.parse_args()
 
 print sys.argv
 
-if len(sys.argv) == 1:
-    mainFile = "main1.lua"
-else:
-    mainFile = sys.argv[1]
-    
-run_perc = "sudo ./build/MoonGen examples/perc-moongen-single/" + mainFile + " 0 1 examples/perc-moongen/DCTCP_CDF 1000 > out.txt"
+rtt = args.rtt
+home = "/home/lavanyaj"
+moonGen = "%s/build/MoonGen"%args.moongenDir
+mainFile = "%s/examples/perc-moongen-single/main1.lua"%args.moongenDir
+mode = args.mode
+numFlows = args.numFlows
+scaling = args.scaling
+cdfFile = "%s/examples/perc-moongen-single/DCTCP_CDF"%args.moongenDir
+tmpFile = "%s/out.txt"%args.moongenDir
+fctFile = "%s/demo/fct_file.csv"%args.percswitchDir
 
+run_perc = "sudo " + moonGen + " " + mainFile + " " + mode + " " + cdfFile + " " + str(scaling) + " " + str(numFlows)  + " > " + tmpFile
 print run_perc
 
 proc = subprocess.Popen(run_perc, stdout=subprocess.PIPE, shell=True)
@@ -22,17 +41,17 @@ proc = subprocess.Popen(run_perc, stdout=subprocess.PIPE, shell=True)
 
 cmd = {}
 
-cmd["medium_tail"] = "grep fct out.txt | sed 's/ULL//g' | awk '{ if ($10 * 1500 >= 1e4 && $10 * 1500 < 1e6) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/$2;}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $2;}'"
+cmd["medium_tail"] = "grep fct %s | sed 's/ULL//g' | awk '{ if ($10 * 1500 >= 1e4 && $10 * 1500 < 1e6) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/(%f+$2);}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $2;}'" % (tmpFile,rtt)
 
-cmd["medium_median"]= "grep fct out.txt | sed 's/ULL//g' | awk '{ if ($10 * 1500 >= 1e4 && $10 * 1500 < 1e6) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/$2;}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $1;}'"
+cmd["medium_median"]= "grep fct %s | sed 's/ULL//g' | awk '{ if ($10 * 1500 >= 1e4 && $10 * 1500 < 1e6) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/(%f+$2);}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $1;}'" % (tmpFile,rtt)
 
-cmd["small_tail"] = "grep fct out.txt | sed 's/ULL//g' | awk '{ if ($10 * 1500 < 1e4) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/$2;}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $2;}'"
+cmd["small_tail"] = "grep fct %s | sed 's/ULL//g' | awk '{ if ($10 * 1500 < 1e4) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/(%f+$2);}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $2;}'" % (tmpFile,rtt)
 
-cmd["small_median"] = "grep fct out.txt | sed 's/ULL//g' | awk '{ if ($10 * 1500 < 1e4) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/$2;}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $1;}'"
+cmd["small_median"] = "grep fct %s | sed 's/ULL//g' | awk '{ if ($10 * 1500 < 1e4) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/(%f+$2);}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $1;}'" % (tmpFile,rtt)
 
-cmd["large_tail"] = "grep fct out.txt | sed 's/ULL//g' | awk '{ if ($10 * 1500 >= 1e6) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/$2;}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $2;}'"
+cmd["large_tail"] = "grep fct %s | sed 's/ULL//g' | awk '{ if ($10 * 1500 >= 1e6) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/(%f+$2);}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $2;}'" % (tmpFile,rtt)
 
-cmd["large_median"] = "grep fct out.txt | sed 's/ULL//g' | awk '{ if ($10 * 1500 >= 1e6) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/$2;}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $1;}'"
+cmd["large_median"] = "grep fct %s | sed 's/ULL//g' | awk '{ if ($10 * 1500 >= 1e6) {print $8*1e6 \" \" $10*1.2;}}' | awk '{print $1/(%f+$2);}' | Rscript -e 'quantile (as.numeric (readLines (\"stdin\")), probs=c(0.5, 0.95))' | tail -n 1 | awk '{print $1;}'" % (tmpFile,rtt)
 
 val = {}
 for k in cmd:
@@ -45,12 +64,14 @@ for k in cmd:
     #print k, ": ", out
 
 current_rate = 10000
-current_alg = "PERC"
+current_alg = "perc"
 fct_small = val["small_tail"]
 fct_medium = val["medium_tail"]
 fct_large = val["large_median"]
-f = open("fct_file.csv", "w")
-result = (",".join([str(x).rstrip() for x in [current_rate,current_alg,fct_small,fct_medium,fct_large]]))
+update_id = int(round(time.time()))
+
+f = open(fctFile, "w")
+result = (",".join([str(x).rstrip() for x in [current_rate,current_alg,fct_small,fct_medium,fct_large,update_id]]))
 print(result)
 f.write(result)
 f.close()
