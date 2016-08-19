@@ -40,23 +40,6 @@ union mac_address ethSrc, ethDst;}
 
 dataMod = {}
 
-function dataMod.rxlog(str)
-   if perc_constants.LOG_RXDATA then
-      print("data2.lua rx log: " .. str)
-   end
-end
-
-function dataMod.txlog(str)
-   if perc_constants.LOG_TXDATA then
-      print("data2.lua tx log: " .. str)
-   end
-end
-
-function dataMod.warn(str)
-   if perc_constants.WARN_DATA then
-      print("data2.lua warn: " .. str)
-   end
-end
 
 function initializePercc1Packet(buf, percgSrc, ethSrc,
 				percgDst, ethDst,
