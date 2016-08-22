@@ -1,0 +1,26 @@
+# sunday, aug 21
+
+# time from flow start to first control packet sent
+cat  /home/lavanyaj/MoonGen/out.txt  | grep true | grep first_control | awk '{if ($4 > 0) {print $3" "$4 " "$7" " $8 " " ($8 - $4)*1e6;}}' | awk '{print $NF-1;}' | sort -n -k 1,1 | Rscript -e 'quantile (as.numeric (readLines ("stdin")), probs=c(0.025, 0.5, 0.95))'
+     2.5%       50%       95%
+      34.98999  55.80000 261.08000
+
+# control packet RTT
+cat  /home/lavanyaj/MoonGen/out.txt  | grep true | grep first_control | awk '{if ($4 > 0 && $10 > 0) {print $7" " $8" "$9" " $10" "($10-$8)*1e6;}}' | awk '{print $NF-1;}' | sort -n -k 1,1 | Rscript -e 'quantile (as.numeric (readLines ("stdin")), probs=c(0.025, 0.5, 0.95))'
+       2.5%         50%         95%
+          223.6825  29278.3500 364571.3500
+
+# time until first data starts transmission
+lavanyaj@mule-1:~/MoonGen$ cat  /home/lavanyaj/MoonGen/out.txt  | grep true | grep first_control | awk '{if ($4 > 0) {print $3" " $4" "$15" " $16" "($16-$4)*1e6;}}' | awk '{print $NF-1;}' | Rscript -e 'quantile (as.numeric (readLines ("stdin")), probs=c(0.025, 0.5, 0.95))'
+   2.5%     50%     95%
+    205.62 1501.50 5703.38
+
+# time from first data transmission start to last data transmission start
+lavanyaj@mule-1:~/MoonGen$ cat  /home/lavanyaj/MoonGen/out.txt  | grep true | grep first_control | awk '{if ($4 > 0 && $30 > 1 && $22 > 0) {print $15" " $16" "$21" " $22" "$29" "$30" "$6" "(($22-$16)*1e6)/$6;}}' | awk '{print $NF-1;}' | Rscript -e 'quantile (as.numeric (readLines ("stdin")), probs=c(0.025, 0.5, 0.95))'
+     2.5%       50%       95%
+       4.22123  57.98070 118.80480
+
+# data transmission time, microseconds per packet
+cat  /home/lavanyaj/MoonGen/out.txt  | grep true | grep first_control | awk '{if ($4 > 0 && $30 > 1 && $22 > 0) {print $15" " $16" "$23" " $24" "$29" "$30" "$6" "(($24-$16)*1e6)/$6;}}'  | awk '{print $NF-1;}' | Rscript -e 'quantile (as.numeric (readLines ("stdin")), probs=c(0.025, 0.5, 0.95))'
+      2.5%        50%        95%
+        4.225684  57.983400 118.805800

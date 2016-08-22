@@ -23,7 +23,28 @@ local CONTROL_PACKET_SIZE = perc_constants.CONTROL_PACKET_SIZE
 local DATA_PACKET_SIZE	= perc_constants.DATA_PACKET_SIZE
 local ACK_PACKET_SIZE = perc_constants.ACK_PACKET_SIZE
 
+local isMonitoring = true
+
 ffi.cdef [[
+typedef struct lalala {
+double start_time;
+uint64_t size;
+double first_control_send_time;
+double first_control_recv_time;
+uint16_t first_control_recv_cqueue;
+uint16_t first_control_recv_dqueue; 
+double first_data_send_start_time;
+double first_data_send_end_time;
+uint16_t first_data_send_size;
+double last_data_send_start_time;
+double last_data_send_end_time;
+uint64_t last_data_send_size;
+double last_ack_time;
+uint16_t num_data_sends;
+bool sender;
+bool timed_out;
+} logFlow;
+
 typedef struct foo { bool active; 
 uint64_t flow, size, sent, acked; double acked_time, start_time;
 uint8_t percgSrc, percgDst;
@@ -298,6 +319,12 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
    local dataRxQueue = nil
    local dataRxBufs = nil
 
+   -- monitoring
+   local logFlowInfo = nil
+   if isMonitoring then
+      logFlowInfo = ffi.new("logFlow[?]",
+			    1000, {})
+      end
    -- To receive and reply to control packets
    if isSending or isReceiving then
       cMem = memory.createMemPool()
@@ -454,6 +481,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       -- 		   .. ", maxHops: " .. pkt.percc1:getMaxHops())
 	       -- end		    
 	       pkt.percc1:doHton()
+	       logFlowInfo[flow].first_control_send_time = dpdk.getTime()
 	       txQueues[perc_constants.NEW_CONTROL_TXQUEUE]:send(cNewBufs)
 	       nextFlowId = nextFlowId + 1
 	    end -- ends do (get start messages)
@@ -500,6 +528,15 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 			-- 	    .. " doesn't match packet's flow " .. pkt.percg:getFlowId())
 			qi = nil
 		     else
+			if isMonitoring then
+			   local flowId = tonumber(qi.flow)
+			   logFlowInfo[flowId].first_control_recv_time
+			      = dpdk.getTime()
+			   logFlowInfo[flowId].first_control_recv_cqueue
+			      = pkt.percc1:getControlQueueSize(2)
+			   logFlowInfo[flowId].first_control_recv_dqueue
+			      = pkt.percc1:getDataQueueSize(2)
+			   end
 			-- qi is correct when queue is valid and flow matches
 		     end
 		     -- TODO: check it's passed by ref
@@ -536,8 +573,14 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       for q=1,perc_constants.MAX_QUEUES do
 		  assert(queueInfo[q].size >= queueInfo[q].sent)
 		  if queueInfo[q].active
-		  and queueInfo[q].sent < queueInfo[q].size then
+		  and queueInfo[q].sent < queueInfo[q].size then		     
 		     local remaining = queueInfo[q].size - queueInfo[q].sent
+
+		     -- for monitoring..
+		     local flow = tonumber(queueInfo[q].flow)
+		     local flowStarting = (queueInfo[q].sent == 0)
+		     local flowEnding = (remaining < txBufs[q].maxSize)
+
 		     if (remaining < txBufs[q].maxSize)
 		     then
 			txBufs[q]:allocN(DATA_PACKET_SIZE, remaining)
@@ -556,13 +599,32 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 			pkt.payload.uint64[4] = queueInfo[q].size
 			pkt.eth:setType(eth.TYPE_PERC_DATA)
 			queueInfo[q].sent = queueInfo[q].sent + 1
-			 -- if (bufNo == 1) then
-			 --    print("dev " .. dev.id .. " sent data packet from "
-			 -- 	    .. pkt.eth:getSrcString()
-			 -- 	    .. " to " .. pkt.eth:getDstString())
-			 -- end
 		     end -- ends for bufNo,..
-		     txQueues[q]:send(txBufs[q])
+
+		     if isMonitoring then
+			if flowStarting then
+			   logFlowInfo[flow].sender = true
+			   logFlowInfo[flow].num_data_sends = 0
+			   logFlowInfo[flow].size = queueInfo[q].size
+			   logFlowInfo[flow].first_data_send_start_time = dpdk.getTime()
+			   logFlowInfo[flow].first_data_send_size = txBufs[q].size
+			end
+			if flowEnding then
+			   logFlowInfo[flow].last_data_send_start_time = dpdk.getTime()
+			   logFlowInfo[flow].last_data_send_size = txBufs[q].size
+			end
+			txQueues[q]:send(txBufs[q])
+			logFlowInfo[flow].num_data_sends =
+			   logFlowInfo[flow].num_data_sends + 1			
+			if flowStarting then
+			   logFlowInfo[flow].first_data_send_end_time = dpdk.getTime()
+			end
+			if flowEnding then
+			   logFlowInfo[flow].last_data_send_end_time = dpdk.getTime()
+			end
+		     else -- just send if not monitoring
+			   txQueues[q]:send(txBufs[q])
+		     end		     			
 		     --txCtr:update()
 		  end -- ends if active
 	       end  -- ends for q=1,perc_constants.MAX_QUEUES
@@ -591,12 +653,24 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     if (queueInfo[q].acked == queueInfo[q].size) then
 			queueInfo[q].active = false
 			table.insert(freeQueues, q)
-			local fct = queueInfo[q].acked_time - queueInfo[q].start_time
+			local fct = (queueInfo[q].acked_time - queueInfo[q].start_time)
+			local fct_us = fct * 1e6
+			local norm_fct = 0
+			if (queueInfo[q].size > 0) then norm_fct = fct_us/queueInfo[q].size end
+			if isMonitoring then
+			   local flow = queueInfo[q].flow
+			   logFlowInfo[flow].start_time = queueInfo[q].start_time
+			   logFlowInfo[flow].last_ack_time = queueInfo[q].acked_time
+			   logFlowInfo[flow].timed_out = false
+			   end
 			log:info("flow " .. tostring(dev.id * 10000ULL + queueInfo[q].flow)
 				    .. " ended (queue " .. tostring(q) .. ")"
 				    .. " fct: " .. tostring(fct)
 				    .. " size: " .. tostring(queueInfo[q].size)
-				    .. " acked: " .. tostring(queueInfo[q].acked))
+				    .. " acked: " .. tostring(queueInfo[q].acked)
+				    .. " fct_us: " .. tostring(fct_us)
+				    .. " norm_fct: " .. tostring(norm_fct)
+			)
 			numFinished = numFinished + 1
 		     end
 		  end
@@ -613,6 +687,12 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		  if queueInfo[q].active and
 		     (lastAckTime > tonumber(queueInfo[q].acked_time)
 		      or queueInfo[q].size == queueInfo[q].acked) then
+
+			if isMonitoring then
+			   local flow = queueInfo[q].flow
+			   logFlowInfo[flow].timed_out = true
+			end
+			
 			log:warn("flow " .. tostring(queueInfo[q].flow)
 				    .. " timed out (queue " .. q .. ")")
 			queueInfo[q].active = false
@@ -721,6 +801,33 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
    end
    --rxCtr:finalize()
    --txCtr:finalize()
+
+   if isMonitoring then
+      for i = 0, 999 do
+	 local info = logFlowInfo[i]
+	 if info.sender == true and info.timed_out == false then
+	    print("flow " .. tostring(i)
+			.. " start_time " .. tostring(info.start_time)
+			.. " size " .. tostring(info.size)
+			.. " first_control_send_time " .. tostring(info.first_control_send_time)
+			.. " first_control_recv_time " .. tostring(info.first_control_recv_time)
+			.. " first_control_recv_cqueue " .. tostring(info.first_control_recv_cqueue)
+			.. " first_control_recv_dqueue " .. tostring(info.first_control_recv_dqueue)
+			.. " first_data_send_start_time " .. tostring(info.first_data_send_start_time)
+			.. " first_data_send_end_time " .. tostring(info.first_data_send_end_time)
+			.. " first_data_send_size " .. tostring(info.first_data_send_size)
+			.. " last_data_send_start_time " .. tostring(info.last_data_send_start_time)
+			.. " last_data_send_end_time " .. tostring(info.last_data_send_end_time)
+			.. " last_data_send_size " .. tostring(info.last_data_send_size)
+			.. " last_ack_time " .. tostring(info.last_ack_time)
+			.. " num_data_sends " .. tostring(info.num_data_sends)
+			.. " sender " .. tostring(info.sender)
+			.. " timed_out " .. tostring(info.timed_out)
+	    )
+	 end
+      end
+   end
+   
 end
 
 return dataMod
