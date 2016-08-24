@@ -436,7 +436,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       queueInfo[q].start_time = (dpdkNow * 1e6)
 	       assert(perc_constants.startRate ~= nil)
 	       queueInfo[q].currentRate = perc_constants.startRate --dev:getTxQueue(q):getTxRate() 
-	       --dev:getTxQueue(q):setRate(perc_constants.startRate) -- start blasting right away v/s trickling right away
+	       dev:getTxQueue(q):setRate(perc_constants.startRate) -- start blasting right away v/s trickling right away
 	       queueInfo[q].nextRate = -1
 	       queueInfo[q].changeTime = -1
 	       log:info("flow " .. tostring(flow)
@@ -688,7 +688,6 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 			.. " last_data_send_start_time " .. tostring(info.last_data_send_start_time)
 			.. " last_data_send_end_time " .. tostring(info.last_data_send_end_time)
 			.. " last_data_send_size " .. tostring(info.last_data_send_size)
-			.. " last_ack_time " .. tostring(info.last_ack_time)
 			.. " num_data_sends " .. tostring(info.num_data_sends)
 			.. " sender " .. tostring(info.sender)
 			.. " timed_out " .. tostring(info.timed_out)
