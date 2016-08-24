@@ -104,9 +104,19 @@ function commonControlProcess(pkt)
       assert(pkt.percc1:getHop() == 0) -- direction of received packet = rev -> received at sender
       maxHops = pkt.percc1:getMaxHops()
    end
+
+   -- log:info("received control packet "
+   -- 	       .. pkt.percg:getString()
+   -- 	       .. "\n" .. pkt.percc1:getString()
+   -- 	       .. "\n")
    
    local bnInfo = pkt.percc1:getBottleneckInfo(maxHops)
    local bnRate1, bnRate2 = bnInfo.bnRate1, bnInfo.bnRate2   
+   -- log:info("for flow " .. pkt.percg:getFlowId()
+   -- 	       .. " bottleneck rate is " .. bnRate1
+   -- 	       .. " based on info from " .. maxHops
+   -- 	       .. " hops.\n")
+
    local bnBitmap = bnInfo.bnBitmap
    assert(bnRate1 ~= nil)
    assert(bnRate2 ~= nil)
@@ -120,13 +130,15 @@ function commonControlProcess(pkt)
       if bnBitmap[i] ~= 1 then
 	 pkt.percc1:setNewLabel(i, percc1.LABEL_SAT)
 	 pkt.percc1:setNewRate(i,  bnRate1)
-	 -- controlMod.log("setting new rate of " .. i
-	 -- 	  .. " to " .. bnRate1)
+	 -- log:info("for flow " .. pkt.percg:getFlowId()
+	 -- 	  .. " setting new demand at hop " .. i
+	 -- 		   .. " to " .. bnRate1)
       else
 	 pkt.percc1:setNewLabel(i, percc1.LABEL_UNSAT)
 	 pkt.percc1:setNewRate(i, bnRate2)
-	 -- controlMod.log("setting new rate of " .. i
-	 -- 	  .. " to " .. bnRate2)
+	 -- log:info("for flow " .. pkt.percg:getFlowId()
+	 -- 	  .. " setting new demand at hop " .. i
+	 -- 		   .. " to " .. bnRate1)
       end
    end -- for i=1,maxHops
    -- receiver sets it to number of hops
@@ -334,7 +346,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
       for q=1,perc_constants.MAX_QUEUES do
 	 txQueues[q] = dev:getTxQueue(q)
       end
-      rxCtr = stats:newDevRxCounter(dev, "plain")
+      rxCtr = stats:newDevRxCounter(dev, "plain", "rx-throughput-".. dev.id .. "-txt")
    end
    
    if isSending then
@@ -435,7 +447,9 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       queueInfo[q].active = true
 	       queueInfo[q].start_time = (dpdkNow * 1e6)
 	       assert(perc_constants.startRate ~= nil)
-	       queueInfo[q].currentRate = perc_constants.startRate --dev:getTxQueue(q):getTxRate() 
+	       queueInfo[q].currentRate = perc_constants.startRate --dev:getTxQueue(q):getTxRate()
+	       log:info("setting rate of flow " .. tostring(flow) ..
+			   " to " .. (perc_constants.startRate*1e3) .. "Kb/s")
 	       dev:getTxQueue(q):setRate(perc_constants.startRate) -- start blasting right away v/s trickling right away
 	       queueInfo[q].nextRate = -1
 	       queueInfo[q].changeTime = -1
@@ -517,8 +531,10 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     end
 		     senderControlProcess(pkt, qi, dpdkNow) -- At this point sender sets packet direction forward
 		     if qi ~= nil and qi.nextRate ~= -1 and qi.changeTime <= dpdkNow then
-			--log:info("setting rate of flow " .. tostring(qi.flow) .. " to " .. qi.nextRate)
-			txQueues[q]:setRate(qi.nextRate)
+			log:info("setting rate of flow " .. tostring(qi.flow) ..
+				    " to " .. qi.nextRate .. " Kb/s")
+			local rate_mbps = qi.nextRate * 1e-3
+			txQueues[q]:setRate(rate_mbps)
 			qi.currentRate = qi.nextRate
 			qi.nextRate = -1
 			qi.changeTime = -1
@@ -641,15 +657,15 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     if (rxQueueInfo[q].recv == rxQueueInfo[q].size) then
 			local fct = dpdkNow*1e6 - rxQueueInfo[q].start_time
 			local fct_us = fct
-			local sent = 0
-			local norm_fct = 0
+			local size = rxQueueInfo[q].size
+			local norm_fct = tonumber(fct/(size*1.2))
 			log:info("flow " .. tostring(pkt.percg:getSource() * 10000ULL + rxQueueInfo[q].flow)
 				    .. " ended (queue " .. tostring(q) .. ")"
 				    .. " fct: " .. tostring(fct)
-				    .. " size: " .. tostring(rxQueueInfo[q].size)
+				    .. " size: " .. tostring(size)
 				    .. " received: " .. tostring(rxQueueInfo[q].recv)
 				    .. " fct_us: " .. tostring(fct_us)
-				    .. " norm_fct: " .. tostring(norm_fct)
+				    .. " norm_fct: " .. string.format("%.1f",norm_fct)
 			)
 		     end
 		     local recvd = rxQueueInfo[q].recv
