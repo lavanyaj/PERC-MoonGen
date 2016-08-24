@@ -115,8 +115,7 @@ function multiConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
 	-- filters for data packets
    txDev0:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
    txDev1:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
-   txDev2:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
-   
+   txDev2:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)   
    rxDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
    
    -- filters for control packets
