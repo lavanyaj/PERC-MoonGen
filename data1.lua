@@ -39,20 +39,20 @@ uint16_t first_data_send_size;
 double last_data_send_start_time;
 double last_data_send_end_time;
 uint64_t last_data_send_size;
-double last_ack_time;
 uint16_t num_data_sends;
 bool sender;
 bool timed_out;
 } logFlow;
 
 typedef struct foo { bool active; 
-uint64_t flow, size, sent, acked; double acked_time, start_time;
+uint64_t flow, size, sent;
+uint64_t start_time;
 uint8_t percgSrc, percgDst;
 union mac_address ethSrc, ethDst;
 int currentRate, nextRate; double changeTime;}
  txQueueInfo;
 typedef struct bar {
-uint64_t flow, recv, acked, size, start_time;
+uint64_t flow, recv, size, start_time;
 uint8_t percgSrc, percgDst;
 union mac_address ethSrc, ethDst;}
  rxQueueInfo;
@@ -302,10 +302,8 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
    local txBufs = nil
    local freeQueues = nil
    local queueInfo = nil
-   local ackRxQueue = nil
-   local ackRxBufs = nil
 
-   local lastAckTime = nil
+
    local lastPeriodicTime = nil
    local nextSendTime = nil
    local nextFlowId = nil
@@ -313,8 +311,6 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
    local numFinished = nil
 
    -- receiving thread's variables
-   local ackMem = nil
-   local ackTxBufs = nil
    local rxQueueInfo = nil
    local dataRxQueue = nil
    local dataRxBufs = nil
@@ -362,7 +358,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
       for q=1,perc_constants.MAX_SENDERS*perc_constants.MAX_QUEUES do
 	 rxQueueInfo[q].recv = 0ULL
 	 rxQueueInfo[q].size = 0ULL
-	 rxQueueInfo[q].acked = 0ULL
+	 rxQueueInfo[q].start_time = 0ULL
       end
 
       dataRxQueue = dev:getRxQueue(perc_constants.DATA_RXQUEUE)
@@ -397,7 +393,6 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
       
       queueInfo = ffi.new("txQueueInfo[?]", perc_constants.MAX_QUEUES+1) -- indexing from 1
 
-      lastAckTime = dpdk.getTime()
       lastPeriodicTime = dpdk.getTime()
       nextSendTime =  dpdk.getTime() --+ interArrivalTime
       nextFlowId = 1
@@ -437,10 +432,8 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       queueInfo[q].percgDst = percgDst -- actually device id only
 	       queueInfo[q].size = size
 	       queueInfo[q].sent = 0
-	       queueInfo[q].acked = 0
 	       queueInfo[q].active = true
-	       queueInfo[q].acked_time = dpdkNow
-	       queueInfo[q].start_time = dpdkNow
+	       queueInfo[q].start_time = (dpdkNow * 1e6)
 	       assert(perc_constants.startRate ~= nil)
 	       queueInfo[q].currentRate = perc_constants.startRate --dev:getTxQueue(q):getTxRate() 
 	       --dev:getTxQueue(q):setRate(perc_constants.startRate) -- start blasting right away v/s trickling right away
@@ -570,7 +563,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 			pkt.percg:setFlowId(queueInfo[q].flow) -- 32b -> 16b
 			pkt.payload.uint64[0] = queueInfo[q].flow
 			pkt.payload.uint64[1] = q
-			pkt.payload.uint64[2] = (queueInfo[q].start_time*1e6)
+			pkt.payload.uint64[2] = queueInfo[q].start_time
 			pkt.payload.uint64[4] = queueInfo[q].size
 			pkt.eth:setType(eth.TYPE_PERC_DATA)
 			queueInfo[q].sent = queueInfo[q].sent + 1
@@ -617,7 +610,6 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 
 	 if isReceiving then
 	    do -- receive data packets and send ACKs	       
-	       local ackNow = false
 	       do
 		  local rx = dataRxQueue:recv(dataRxBufs)		  
 		  for b = 1, rx do
@@ -636,7 +628,6 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     if rxQueueInfo[q].flow ~= flow then
 			rxQueueInfo[q].flow = flow 
 			rxQueueInfo[q].recv = 0ULL
-			rxQueueInfo[q].acked = 0ULL
 			rxQueueInfo[q].size = size
 			rxQueueInfo[q].start_time = start_time
 			rxQueueInfo[q].ethSrc = pkt.eth.src
@@ -647,9 +638,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     -- assert(seqNo < size)
 		     assert(rxQueueInfo[q].size == size)	   
 		     rxQueueInfo[q].recv = rxQueueInfo[q].recv + 1
-		     -- ackNow = true
 		     if (rxQueueInfo[q].recv == rxQueueInfo[q].size) then
-		     	ackNow = true
 			local fct = dpdkNow*1e6 - rxQueueInfo[q].start_time
 			local fct_us = fct
 			local sent = 0
