@@ -1,3 +1,5 @@
+local percc1 = require "proto.percc1"
+
 constantsMod = {
    ["APP_MAX_FLOW_SIZE_BYTES"] = 3e6,
    ["CONTROL_PACKET_SIZE"] = 128,
@@ -25,7 +27,7 @@ constantsMod = {
    ["ethAddrStr3"] = "0c:44:44:44:44:44",
    ["ethAddrStr0"] = "0c:11:11:11:11:11",
    ["ethAddrStr1"] = "0c:22:22:22:22:22",
-   ["END_HOST_LINK_MBPS"] = 8000,
+   ["END_HOST_LINK_KBPS"] = percc1.RATE_INFINITE, -- assume end host is not the bottleneck
 }
 
 return constantsMod
