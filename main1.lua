@@ -24,7 +24,7 @@ function master(mode, cdfFilepath, scaling, interArrivalTime, numFlows)
    end
    
    if mode == "single" then singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
-   else multiConnection(cdfFilepath, scaling, numFlows) end
+   else multiConnection(cdfFilepath, scaling, interArrivalTime, numFlows) end
 end
 
 function singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
@@ -59,7 +59,7 @@ function singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
    txDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
    rxDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
 
-   dpdk.setRuntime(5)
+   dpdk.setRuntime(500)
    local readyPipes = ipc.getReadyPipes(2)
    local tableDst = {}
    tableDst[txPort] = txPort
@@ -82,6 +82,100 @@ function singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
    		  nil,
    		  false, true,
    		  readyPipes, 2)
+
+   -- dpdk.launchLua("loadDataSlave", rxDev, nil,
+   -- 		  nil, rxPort, rxPort,
+   -- 		  nil,
+   -- 		  false, true,
+   -- 		  readyPipes, 2)
+
+   dpdk.waitForSlaves()
+end
+
+function multiConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
+   local txPort0 = 0
+   local txPort1 = 1
+   local txPort2 = 2
+   local rxPort = 3
+   -- local macAddrType = ffi.typeof("union mac_address")	
+   local txDev0 = device.config{port = txPort0,
+			       rxQueues = 5,
+			       txQueues = perc_constants.MAX_QUEUES+1}
+   local txDev1 = device.config{port = txPort1,
+			       rxQueues = 5,
+			       txQueues = perc_constants.MAX_QUEUES+1}
+   local txDev2 = device.config{port = txPort2,
+			       rxQueues = 5,
+			       txQueues = perc_constants.MAX_QUEUES+1}
+
+   local rxDev = device.config{port = rxPort,
+			       rxQueues = 5,
+			       txQueues = perc_constants.MAX_QUEUES+1}
+   
+	-- filters for data packets
+   txDev0:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
+   txDev1:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
+   txDev2:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
+   
+   rxDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
+   
+   -- filters for control packets
+   txDev0:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
+   txDev1:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
+   txDev2:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
+   rxDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
+   log:info("filter packets with ethType "
+	       .. eth.TYPE_PERCG .. " to rx queue "
+	       .. perc_constants.CONTROL_RXQUEUE .. " on device " .. txDev0.id
+	       .. ", " .. eth.TYPE_PERCG .. " to rx queue "
+	       .. perc_constants.CONTROL_RXQUEUE .. " on device " .. rxDev.id)
+
+   
+   rxDev:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
+   txDev0:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
+   txDev1:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
+   txDev2:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
+   
+   -- rate limit control packets
+   txDev0:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
+   txDev1:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
+   txDev2:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
+   
+   rxDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
+
+   dpdk.setRuntime(500)
+   local readyPipes = ipc.getReadyPipes(4)
+   local tableDst = {}
+   tableDst[rxPort] = rxPort   
+   dpdk.launchLua("loadDataSlave", txDev0, cdfFilepath,
+		  scaling, interArrivalTime, numFlows, txPort0, txPort0,
+		  tableDst,
+		  true, false,
+		  readyPipes, 1)
+
+   dpdk.launchLua("loadDataSlave", txDev1, cdfFilepath,
+		  scaling, interArrivalTime, numFlows, txPort1, txPort1,
+		  tableDst,
+		  true, false,
+		  readyPipes, 2)
+
+   dpdk.launchLua("loadDataSlave", txDev2, cdfFilepath,
+		  scaling, interArrivalTime, numFlows, txPort2, txPort2,
+		  tableDst,
+		  true, false,
+		  readyPipes, 3)
+
+   -- dpdk.launchLua("loadDataSlave", rxDev, cdfFilepath,
+   -- 		  numFlows, rxPort, rxPort,
+   -- 		  tableDst,
+   -- 		  true, false,
+   -- 		  readyPipes, 2)
+
+   dpdk.launchLua("loadDataSlave", rxDev, nil,
+   		  nil, nil, nil, rxPort, rxPort,
+   		  nil,
+   		  false, true,
+   		  readyPipes, 4)
 
    -- dpdk.launchLua("loadDataSlave", rxDev, nil,
    -- 		  nil, rxPort, rxPort,

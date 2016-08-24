@@ -15,7 +15,8 @@ constantsMod = {
    ["ACK_TXQUEUE"] = 3,
    ["DROP_QUEUE"] = 4,
    ["MAX_QUEUES"] = 60,
-   ["tx_ack_timeout"] = 20 * (0.1),
+   ["MAX_SENDERS"] = 4,
+   ["tx_ack_timeout"] = 100,
    ["rtts"] = 0.0005, -- delay before increasing rate
    ["startRate"] = 11, -- Mb/s
    -- device id to mac address mapping (based on FPGA routing

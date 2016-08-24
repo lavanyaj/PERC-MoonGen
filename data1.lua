@@ -333,7 +333,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
       -- CONTROL_TX_QUEUE   
       link = PercLink:new()
       -- link statistics, and all tx queues      
-      --txCtr = stats:newDevTxCounter(dev, "plain")
+      txCtr = stats:newDevTxCounter(dev, "plain")
       txQueues = {}
       for q=1,perc_constants.MAX_QUEUES do
 	 txQueues[q] = dev:getTxQueue(q)
@@ -367,9 +367,9 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
       ackTxBufs = ackMem:bufArray()
       rxQueueInfo =
 	 ffi.new("rxQueueInfo[?]",
-		 perc_constants.MAX_QUEUES+1, {}) -- indexing from 
+		 perc_constants.MAX_SENDERS*perc_constants.MAX_QUEUES+1, {}) -- indexing from , one per src
       -- invariants
-      for q=1,perc_constants.MAX_QUEUES do
+      for q=1,perc_constants.MAX_SENDERS*perc_constants.MAX_QUEUES do
 	 rxQueueInfo[q].recv = 0ULL
 	 rxQueueInfo[q].size = 0ULL
 	 rxQueueInfo[q].acked = 0ULL
@@ -411,7 +411,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 
       lastAckTime = dpdk.getTime()
       lastPeriodicTime = dpdk.getTime()
-      nextSendTime =  dpdk.getTime() + interArrivalTime
+      nextSendTime =  dpdk.getTime() --+ interArrivalTime
       nextFlowId = 1
       
       numStarted = 0
@@ -470,7 +470,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       pkt.payload.uint64[0] = q
 	       queueInfo[q].ethSrc = pkt.eth.src
 	       queueInfo[q].ethDst = pkt.eth.dst
-	       link:processPercc1Packet(pkt)
+	       --link:processPercc1Packet(pkt)
 	       -- stored in host or network order??
 	       -- if (true) then
 	       -- 	  print("dev " .. dev.id .. " sent new control packet from "
@@ -506,7 +506,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 
 	       if pkt.percc1:IsForward() == false then
 		  -- if (true) then print (" ingress link processing at dev " .. dev.id) end
-		  link:processPercc1Packet(pkt)
+		  --link:processPercc1Packet(pkt)
 	       end
 	       
 	       if pkt.percc1:IsForward() then
@@ -551,7 +551,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     assert(pkt.percc1:IsForward() or pkt.eth:getType() == eth.TYPE_DROP)
 		     if (pkt.eth:getType() ~= eth.TYPE_DROP) then
 			-- if (true) then print (" egress link processing at dev " .. dev.id) end
-			link:processPercc1Packet(pkt)
+			--link:processPercc1Packet(pkt)
 		     end
 		  end -- ends IFSENDING
 	       end
@@ -625,9 +625,10 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     else -- just send if not monitoring
 			   txQueues[q]:send(txBufs[q])
 		     end		     			
-		     --txCtr:update()
+		     
 		  end -- ends if active
 	       end  -- ends for q=1,perc_constants.MAX_QUEUES
+	       txCtr:update()
 	    end  -- ends do (send data packets)
 	    
 	    do -- (receive acks)
@@ -675,7 +676,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     end
 		  end
 	       end
-	       --rxCtr:update()
+	       rxCtr:update()
 	       ackRxBufs:freeAll()
 	    end -- ends do (receive acks)
 
@@ -720,7 +721,8 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		      -- 	print("dev " .. dev.id .. " got data packet from "
 		      -- 		 .. pkt.eth:getSrcString()
 		      -- 		 .. " to " .. pkt.eth:getDstString())
-		      -- end		    
+		     -- end
+		     q = (pkt.percg:getSource() * perc_constants.MAX_QUEUES) + q
 		     if rxQueueInfo[q].flow ~= flow then
 			rxQueueInfo[q].flow = flow 
 			rxQueueInfo[q].recv = 0ULL
@@ -747,7 +749,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     assert(rxQueueInfo[q].recv <= rxQueueInfo[q].size)	    
 		  end
 		  if rx > 0 then
-		     --rxCtr:update()
+		     rxCtr:update()
 		     dataRxBufs:freeAll()
 		  end	 
 	       end      
@@ -759,7 +761,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		  local now = dpdk.getTime()
 		  if ackNow then
 		     local newAcks = 0
-		     for q=1,perc_constants.MAX_QUEUES do
+		     for q=1,perc_constants.MAX_SENDERS*perc_constants.MAX_QUEUES do
 			assert(rxQueueInfo[q].recv <= rxQueueInfo[q].size)
 			if rxQueueInfo[q].recv > rxQueueInfo[q].acked then
 			   newAcks = newAcks + 1 end
@@ -767,14 +769,15 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     if newAcks > 0 then
 			ackTxBufs:allocN(ACK_PACKET_SIZE, newAcks)	    
 			local b = 1
-			for q=1,perc_constants.MAX_QUEUES do	 
+			for q=1,perc_constants.MAX_QUEUES*4 do	 
 			   if rxQueueInfo[q].recv > rxQueueInfo[q].acked then
+			      print("acking " .. q .. ": " .. tostring(rxQueueInfo[q].flow))
 			      rxQueueInfo[q].acked = rxQueueInfo[q].recv
 			      assert(b <= newAcks)
 			      local pkt = ackTxBufs[b]:getPercgPacket()
 			      b = b + 1
 			      pkt.payload.uint64[0] = rxQueueInfo[q].flow 
-			      pkt.payload.uint64[1] = q -- lua number -> double -> 32b
+			      pkt.payload.uint64[1] = q%perc_constants.MAX_QUEUES -- lua number -> double -> 32b
 			      pkt.payload.uint64[2] = rxQueueInfo[q].acked
 			      pkt.payload.uint64[3] = rxQueueInfo[q].flow
 				 + pkt.payload.uint64[1] + rxQueueInfo[q].recv
@@ -799,8 +802,8 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	    end -- ends if Receiving
 	 end -- ends while dpdk.running()
    end
-   --rxCtr:finalize()
-   --txCtr:finalize()
+   rxCtr:finalize()
+   txCtr:finalize()
 
    if isMonitoring then
       for i = 0, 999 do
