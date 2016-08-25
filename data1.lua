@@ -23,7 +23,7 @@ local CONTROL_PACKET_SIZE = perc_constants.CONTROL_PACKET_SIZE
 local DATA_PACKET_SIZE	= perc_constants.DATA_PACKET_SIZE
 local ACK_PACKET_SIZE = perc_constants.ACK_PACKET_SIZE
 
-local isMonitoring = true
+local isMonitoring = false
 
 ffi.cdef [[
 typedef struct lalala {
@@ -195,7 +195,7 @@ function senderControlProcess(pkt, queueInfo, dpdkNow)
 
       -- TODO(lav): not perfectly conservative but that's ok
       if (queueInfo.nextRate == -1) then
-      	 queueInfo.nextRate = newRate
+      	 queueInfo.nextRate = newRate	 
       	 queueInfo.changeTime = dpdkNow + 2 * perc_constants.rtts
       else
 	 queueInfo.nextRate = newRate
@@ -331,7 +331,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
    local logFlowInfo = nil
    if isMonitoring then
       logFlowInfo = ffi.new("logFlow[?]",
-			    1000, {})
+			    1002, {})
       end
    -- To receive and reply to control packets
    if isSending or isReceiving then
@@ -417,7 +417,13 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
    if isSending and (isReceiving == false) then
       dpdk.sleepMillis(500)
    end
-   
+
+   local outputFile = nil
+   if isReceiving then
+      outputFile = io.open("/home/sibanez/tools/MoonGen/out.txt", "w")
+      assert(outputFile ~= nil)
+   end
+
    -- a thread that's receiving runs forever
    -- a thread that's only sending stops as soon as all finish
    while dpdk.running() and
@@ -448,9 +454,11 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       queueInfo[q].start_time = (dpdkNow * 1e6)
 	       assert(perc_constants.startRate ~= nil)
 	       queueInfo[q].currentRate = perc_constants.startRate --dev:getTxQueue(q):getTxRate()
-	       log:info("setting rate of flow " .. tostring(flow) ..
-			   " to " .. (perc_constants.startRate*1e3) .. "Kb/s")
+	       --log:info("setting rate of flow " .. tostring(flow) ..
+	       --		   " to " .. (perc_constants.startRate*1e3) .. "Kb/s")	       
+
 	       dev:getTxQueue(q):setRate(perc_constants.startRate) -- start blasting right away v/s trickling right away
+	
 	       queueInfo[q].nextRate = -1
 	       queueInfo[q].changeTime = -1
 	       log:info("flow " .. tostring(flow)
@@ -476,7 +484,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       -- 		   .. ", maxHops: " .. pkt.percc1:getMaxHops())
 	       -- end		    
 	       pkt.percc1:doHton()
-	       logFlowInfo[flow].first_control_send_time = dpdk.getTime()
+	       if isMonitoring then logFlowInfo[flow].first_control_send_time = dpdk.getTime() end
 	       txQueues[perc_constants.NEW_CONTROL_TXQUEUE]:send(cNewBufs)
 	       nextFlowId = nextFlowId + 1
 	    end -- ends do (get start messages)
@@ -625,68 +633,75 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 
 
 	 if isReceiving then
-	    do -- receive data packets and send ACKs	       
-	       do
-		  local rx = dataRxQueue:recv(dataRxBufs)		  
-		  for b = 1, rx do
-		     local buf = dataRxBufs[b]
-		     local pkt = buf:getPercgPacket()
-		     local flow = pkt.payload.uint64[0]
-		     local q = pkt.payload.uint64[1]
-		     local start_time = pkt.payload.uint64[2]
-		     local size = pkt.payload.uint64[4]
-		     -- if (b == 1) then
-		     -- 	print("dev " .. dev.id .. " got data packet from "
-		     --   		 .. pkt.eth:getSrcString()
-		     --   		 .. " to " .. pkt.eth:getDstString())
-		     -- end
-		     q = (pkt.percg:getSource() * perc_constants.MAX_QUEUES) + q
-		     if rxQueueInfo[q].flow ~= flow then
-			rxQueueInfo[q].flow = flow 
-			rxQueueInfo[q].recv = 0ULL
-			rxQueueInfo[q].size = size
-			rxQueueInfo[q].start_time = start_time
-			rxQueueInfo[q].ethSrc = pkt.eth.src
-			rxQueueInfo[q].ethDst = pkt.eth.dst
-			rxQueueInfo[q].percgSrc = pkt.percg:getSource()
-			rxQueueInfo[q].percgDst = pkt.percg:getDestination()
+	    local rx = dataRxQueue:recv(dataRxBufs)		  
+	    for b = 1, rx do
+	       local buf = dataRxBufs[b]
+	       local pkt = buf:getPercgPacket()
+	       local flow = pkt.payload.uint64[0]
+	       local q = pkt.payload.uint64[1]
+	       local start_time = pkt.payload.uint64[2]
+	       local size = pkt.payload.uint64[4]
+	       -- if (b == 1) then
+	       -- 	print("dev " .. dev.id .. " got data packet from "
+	       --   		 .. pkt.eth:getSrcString()
+	       --   		 .. " to " .. pkt.eth:getDstString())
+	       -- end
+	       q = (pkt.percg:getSource() * perc_constants.MAX_QUEUES) + q
+	       if rxQueueInfo[q].flow ~= flow then
+		  rxQueueInfo[q].flow = flow 
+		  rxQueueInfo[q].recv = 0ULL
+		  rxQueueInfo[q].size = size
+		  rxQueueInfo[q].start_time = start_time
+		  rxQueueInfo[q].ethSrc = pkt.eth.src
+		  rxQueueInfo[q].ethDst = pkt.eth.dst
+		  rxQueueInfo[q].percgSrc = pkt.percg:getSource()
+		  rxQueueInfo[q].percgDst = pkt.percg:getDestination()
+	       end
+	       -- assert(seqNo < size)
+	       assert(rxQueueInfo[q].size == size)	   
+	       rxQueueInfo[q].recv = rxQueueInfo[q].recv + 1
+	       if (rxQueueInfo[q].recv == rxQueueInfo[q].size) then
+		  local fct = dpdkNow*1e6 - rxQueueInfo[q].start_time
+		  local fct_us = fct
+		  local size = rxQueueInfo[q].size
+		  local norm_fct = 0
+		  if (size > 0) then 
+		     norm_fct = tonumber(fct/(size*1.2))
+		  else
+		     log:warn("saw zero size for flow ")
 		     end
-		     -- assert(seqNo < size)
-		     assert(rxQueueInfo[q].size == size)	   
-		     rxQueueInfo[q].recv = rxQueueInfo[q].recv + 1
-		     if (rxQueueInfo[q].recv == rxQueueInfo[q].size) then
-			local fct = dpdkNow*1e6 - rxQueueInfo[q].start_time
-			local fct_us = fct
-			local size = rxQueueInfo[q].size
-			local norm_fct = tonumber(fct/(size*1.2))
-			log:info("flow " .. tostring(pkt.percg:getSource() * 10000ULL + rxQueueInfo[q].flow)
-				    .. " ended (queue " .. tostring(q) .. ")"
-				    .. " fct: " .. tostring(fct)
-				    .. " size: " .. tostring(size)
-				    .. " received: " .. tostring(rxQueueInfo[q].recv)
-				    .. " fct_us: " .. tostring(fct_us)
-				    .. " norm_fct: " .. string.format("%.1f",norm_fct)
-			)
-		     end
-		     local recvd = rxQueueInfo[q].recv
-		     local total = rxQueueInfo[q].size
-		     if(recvd > total) then 
-			log:warn("for flow " .. tostring(flow)
-				    .. " recvd " .. tostring(recvd)
-				 .. " more than size " .. tostring(size)) end
-		     assert(rxQueueInfo[q].recv <= rxQueueInfo[q].size)	    
-		  end
-		  if rx > 0 then
-		     rxCtr:update()
-		     dataRxBufs:freeAll()
-		  end	 		  
-	       end -- ends fo for receiving data and sending ACKs
-	    end -- ends if Receiving
-	 end -- ends while dpdk.running()
-   end
-   rxCtr:finalize()
-   txCtr:finalize()
+		  fct_str = ("flow " .. tostring(pkt.percg:getSource() * 10000ULL + rxQueueInfo[q].flow)
+			      .. " ended (queue " .. tostring(q) .. ")"
+			      .. " fct: " .. tostring(fct)
+			      .. " size: " .. tostring(size)
+			      .. " received: " .. tostring(rxQueueInfo[q].recv)
+			      .. " fct_us: " .. tostring(fct_us)
+			      .. " norm_fct: " .. string.format("%.1f",norm_fct)
+			    )
+		  log:info(fct_str)
+		  if isReceiving then outputFile:write(fct_str .. "\n") end
+	       end
+	       local recvd = rxQueueInfo[q].recv
+	       local total = rxQueueInfo[q].size
+	       if(recvd > total) then 
+		  log:warn("for flow " .. tostring(flow)
+			      .. " recvd " .. tostring(recvd)
+			   .. " more than size " .. tostring(size)) end
+	       assert(rxQueueInfo[q].recv <= rxQueueInfo[q].size)	    
+	    end -- ends for b = 1,rx
+	    
+	    if rx > 0 then
+	       rxCtr:update()
+	       dataRxBufs:freeAll()
+	    end	 		  	 
+	 end -- ends if Receiving
+   end -- ends while dpdk.running()
 
+   log:info("dpdk stop running on " .. dev.id)
+   rxCtr:finalize()
+   --txCtr:finalize()
+
+   if isReceiving then outputFile:close() end
    if isMonitoring then
       for i = 0, 999 do
 	 local info = logFlowInfo[i]
@@ -710,8 +725,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	    )
 	 end
       end
-   end
-   
+   end   
 end
 
 return dataMod

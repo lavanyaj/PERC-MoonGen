@@ -59,7 +59,7 @@ function singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
    txDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
    rxDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
 
-   dpdk.setRuntime(500)
+   dpdk.setRuntime(120)
    local readyPipes = ipc.getReadyPipes(2)
    local tableDst = {}
    tableDst[txPort] = txPort

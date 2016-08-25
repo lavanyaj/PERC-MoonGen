@@ -1,5 +1,5 @@
+local log = require "log"
 local ffi = require("ffi")
-
 
 ffi.cdef [[
 typedef struct {
@@ -29,6 +29,7 @@ function fsdMod.create ()
 end
 
 function fsdMod:loadCDF(filename)
+   math.randomseed(os.time())
    local numLines = 0
    for line in io.lines(filename) do
       numLines = numLines + 1
@@ -95,7 +96,8 @@ function fsdMod:value()
       return self:interpolate(u, self.table_[mid-1].cdf_, self.table_[mid-1].val_,
 				self.table_[mid].cdf_, self.table_[mid].val_)
    end
-   -- print("didn't find a flow size at probability " .. tostring(u))
+   log:warn("didn't find a flow size at probability " .. tostring(u))
+   return self:value()
 end
 
 function fsdMod:interpolate(x, x1, y1, x2, y2)
