@@ -8,7 +8,7 @@ local eth = require "proto.ethernet"
 local percg = require "proto.percg"
 local percc1 = require "proto.percc1"
 
-local perc_constants = require "examples.perc-moongen-single.constants-han1"
+local perc_constants = require "examples.perc-moongen.constants-han1"
 
 local Link = {sumSat = 0, numSat = 0, numUnsat = 0, linkCapacity = perc_constants.END_HOST_LINK_MBPS}
 
@@ -22,7 +22,7 @@ end
 function Link:processPercc1Packet (pkt)
     --local pkt = buf:getPercc1Packet()
 
-    if (pkt.percc1:IsForward() == false) then
+    if (pkt.percc1:getIsForward() == false) then
        -- reverse packets use hop-1 to index into right agg/ hostState       
        pkt.percc1:decrementHop()
     end

@@ -9,21 +9,21 @@ local stats		= require "stats"
 local pkt = require("packet")
 local pipe		= require "pipe"
 
-local fsd = require "examples.perc-moongen-single.flow-size-distribution"
-local PercLink = require "examples.perc-moongen-single.perc_link"
+local fsd = require "examples.perc-moongen.flow-size-distribution"
+local PercLink = require "examples.perc-moongen.perc_link"
 
 local percg = require "proto.percg"
 local percc1 = require "proto.percc1"
 local eth = require "proto.ethernet"
 
-local ipc = require "examples.perc-moongen-single.ipc"
-local perc_constants = require "examples.perc-moongen-single.constants-han1"
+local ipc = require "examples.perc-moongen.ipc"
+local perc_constants = require "examples.perc-moongen.constants-han1"
 
 local CONTROL_PACKET_SIZE = perc_constants.CONTROL_PACKET_SIZE
 local DATA_PACKET_SIZE	= perc_constants.DATA_PACKET_SIZE
 local ACK_PACKET_SIZE = perc_constants.ACK_PACKET_SIZE
 
-local isMonitoring = true
+local isMonitoring = false
 
 ffi.cdef [[
 typedef struct lalala {
@@ -96,7 +96,7 @@ function commonControlProcess(pkt)
    
    -- get maxHops, then smallest index, two rates
    local maxHops = pkt.percc1:getHop()
-   if (pkt.percc1:IsForward()) then -- direction of received packet = fwd -> received at receiver
+   if (pkt.percc1:getIsForward()) then -- direction of received packet = fwd -> received at receiver
       -- maxHops is whatever source set, could be 0 for new packet or actual maxHops for old packet
       -- from sender
       -- do nothing
@@ -481,7 +481,9 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       -- 		   .. ", maxHops: " .. pkt.percc1:getMaxHops())
 	       -- end		    
 	       pkt.percc1:doHton()
-	       logFlowInfo[flow].first_control_send_time = dpdk.getTime()
+	       if isMonitoring then
+		  logFlowInfo[flow].first_control_send_time = dpdk.getTime()
+	       end
 	       txQueues[perc_constants.NEW_CONTROL_TXQUEUE]:send(cNewBufs)
 	       nextFlowId = nextFlowId + 1
 	    end -- ends do (get start messages)
@@ -504,12 +506,12 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       -- 		   .. ", maxHops: " .. pkt.percc1:getMaxHops())
 	       -- end		    
 
-	       if pkt.percc1:IsForward() == false then
+	       if pkt.percc1:getIsForward() == false then
 		  -- if (true) then print (" ingress link processing at dev " .. dev.id) end
 		  link:processPercc1Packet(pkt)
 	       end
 	       
-	       if pkt.percc1:IsForward() then
+	       if pkt.percc1:getIsForward() then
 		  receiverControlProcess(pkt) -- At this point, receiver sets packet direction to reverse
 	       else
 		  assert(isSending)
@@ -530,12 +532,14 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     else
 			if isMonitoring then
 			   local flowId = tonumber(qi.flow)
-			   logFlowInfo[flowId].first_control_recv_time
-			      = dpdk.getTime()
-			   logFlowInfo[flowId].first_control_recv_cqueue
-			      = pkt.percc1:getControlQueueSize(2)
-			   logFlowInfo[flowId].first_control_recv_dqueue
-			      = pkt.percc1:getDataQueueSize(2)
+			   if isMonitoring then
+			      logFlowInfo[flowId].first_control_recv_time
+				 = dpdk.getTime()
+			      logFlowInfo[flowId].first_control_recv_cqueue
+				 = pkt.percc1:getControlQueueSize(2)
+			      logFlowInfo[flowId].first_control_recv_dqueue
+				 = pkt.percc1:getDataQueueSize(2)
+			      end
 			   end
 			-- qi is correct when queue is valid and flow matches
 		     end
@@ -548,7 +552,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 			qi.nextRate = -1
 			qi.changeTime = -1
 		     end
-		     assert(pkt.percc1:IsForward() or pkt.eth:getType() == eth.TYPE_DROP)
+		     assert(pkt.percc1:getIsForward() or pkt.eth:getType() == eth.TYPE_DROP)
 		     if (pkt.eth:getType() ~= eth.TYPE_DROP) then
 			-- if (true) then print (" egress link processing at dev " .. dev.id) end
 			link:processPercc1Packet(pkt)
@@ -655,21 +659,24 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 			table.insert(freeQueues, q)
 			local fct = (queueInfo[q].acked_time - queueInfo[q].start_time)
 			local fct_us = fct * 1e6
-			local norm_fct = 0
-			if (queueInfo[q].size > 0) then norm_fct = fct_us/queueInfo[q].size end
+			--local norm_fct = 0
+			--if (queueInfo[q].size > 0) then norm_fct = fct_us/queueInfo[q].size end
+			local avg_throughput = 0
+			if (fct > 0) then avg_throughput = ((tonumber(queueInfo[q].size) * 1500 * 8)/fct)/1e6 end
 			if isMonitoring then
 			   local flow = queueInfo[q].flow
 			   logFlowInfo[flow].start_time = queueInfo[q].start_time
 			   logFlowInfo[flow].last_ack_time = queueInfo[q].acked_time
 			   logFlowInfo[flow].timed_out = false
-			   end
+			end
+			-- 				    .. " norm_fct (us/byte): " .. tostring(norm_fct)
 			log:info("flow " .. tostring(dev.id * 10000ULL + queueInfo[q].flow)
 				    .. " ended (queue " .. tostring(q) .. ")"
 				    .. " fct: " .. tostring(fct)
 				    .. " size: " .. tostring(queueInfo[q].size)
 				    .. " acked: " .. tostring(queueInfo[q].acked)
 				    .. " fct_us: " .. tostring(fct_us)
-				    .. " norm_fct: " .. tostring(norm_fct)
+				    .. " avg_throughput (Mb/s): " .. tostring(math.floor(avg_throughput))
 			)
 			numFinished = numFinished + 1
 		     end

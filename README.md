@@ -2,11 +2,11 @@
 
 ## Setup
 - Clone https://github.com/lavanyaj/MoonGen.git
-- Extract to MoonGen/examples as perc-moongen-single
-- Run MoonGen/examples/perc-moongen-single/run_perc.py to run PERC using default options (one sender to one receiver, original DCTCP flow sizes, 1000 flows)
+- Extract to MoonGen/examples as perc-moongen
+- Run MoonGen/examples/perc-moongen/run_perc.py to run PERC using default options (one sender to one receiver, original DCTCP flow sizes, 1000 flows)
 
 ## Parameters
-All the *tunable parameters* are in perc-moongen-single/constants-han1.lua. Defaults are
+All the *tunable parameters* are in perc-moongen/constants-han1.lua. Defaults are
 - *Start Rate* : 12 Mb/s when any flow starts
 - *Tx Ack Timeout Interval*: 5s Will time out/ reclaim resources from flows that haven't finished in this time
 - *Rtts*: Flows wait for 2 * *Rtts* before increasing their rates to make sure everyone's gotten the memo, and required flows have reduced their rates

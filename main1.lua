@@ -1,5 +1,5 @@
 -- Usage:
--- sudo ./build/MoonGen examples/perc-moongen-single/main.lua 0 1 examples/perc-moongen/DCTCP_CDF 1000
+-- sudo ./build/MoonGen examples/perc-moongen/main.lua 0 1 examples/perc-moongen/DCTCP_CDF 1000
 -- two threads per port
 local filter    = require "filter"
 local dpdk	= require "dpdk"
@@ -8,11 +8,11 @@ local log = require "log"
 local pipe		= require "pipe"
 local eth = require "proto.ethernet"
 
-local perc_constants = require "examples.perc-moongen-single.constants-han1"
-local ipc = require "examples.perc-moongen-single.ipc"
-local fsd = require "examples.perc-moongen-single.flow-size-distribution"
+local perc_constants = require "examples.perc-moongen.constants-han1"
+local ipc = require "examples.perc-moongen.ipc"
+local fsd = require "examples.perc-moongen.flow-size-distribution"
 
-local data = require "examples.perc-moongen-single.data1"
+local data = require "examples.perc-moongen.data1"
 
 
 function master(mode, cdfFilepath, scaling, interArrivalTime, numFlows)

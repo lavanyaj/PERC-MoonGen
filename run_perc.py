@@ -26,9 +26,9 @@ print sys.argv
 rtt = args.rtt
 home = "/home/lavanyaj"
 moonGen = "%s/build/MoonGen"%args.moongenDir
-mainFile = "%s/examples/perc-moongen-single/main1.lua"%args.moongenDir
+mainFile = "%s/examples/perc-moongen/main1.lua"%args.moongenDir
 mode = args.mode
-cdfFile = "%s/examples/perc-moongen-single/DCTCP_CDF"%args.moongenDir
+cdfFile = "%s/examples/perc-moongen/DCTCP_CDF"%args.moongenDir
 scaling = args.scaling
 interArrivalTime = args.interArrivalTime
 numFlows = args.numFlows
