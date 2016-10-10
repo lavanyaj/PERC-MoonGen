@@ -14,29 +14,38 @@ local fsd = require "examples.perc-moongen.flow-size-distribution"
 
 local data = require "examples.perc-moongen.data1"
 
+local run_config = {}
 
-function master(mode, cdfFilepath, scaling, interArrivalTime, numFlows)
-   if not mode or not cdfFilepath or not scaling  or not interArrivalTime or not numFlows then
-      return log:info("usage: single/multi cdfFilepath scaling numFlows\n"
-			 .. " multi -> port 0 and 1 sending to 2 and 3"
-			 .. ", single -> port 0 sending to port 1\n"
-			 .. " scaling = 0.1 -> flows are ten times shorter")
+function master(mode, cdfFilepath, scaling, interArrivalTime, startRate, numFlows, txAckTimeout, delayBeforeIncrease, maxQueues)
+   run_config["interArrivalTime"] = interArrivalTime
+   run_config["startRate"] = startRate
+   run_config["numFlows"] = numFlows
+   run_config["cdfFilepath"] = cdfFilepath
+   run_config["scaling"] = scaling
+   run_config["txAckTimeout"] = txAckTimeout or 2
+   run_config["delayBeforeIncrease"] = delayBeforeIncrease or 0.0005
+   run_config["maxQueues"] = maxQueues or 60
+   assert(run_config.maxQueues > 5 and run_config.maxQueues < 128)
+   -- delay before increasing rate
+
+   if not mode or not cdfFilepath or not scaling  or not startRate or not interArrivalTime or not numFlows then
+      return log:info("usage: single/multi cdfFilepath scaling interArrivalTime(s) startRate(Mb/s) numFlows txAckTimeout(s) delayBeforeIncrease(s) maxQueues(6-127)")
    end
    
-   if mode == "single" then singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
+   if mode == "single" then singleConnection(run_config)
    else multiConnection(cdfFilepath, scaling, numFlows) end
 end
 
-function singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
+function singleConnection(run_config)
    local txPort = 0
    local rxPort = 1
    -- local macAddrType = ffi.typeof("union mac_address")	
    local txDev = device.config{port = txPort,
 			       rxQueues = 5,
-			       txQueues = perc_constants.MAX_QUEUES+1}
+			       txQueues = run_config.maxQueues +1}
    local rxDev = device.config{port = rxPort,
 			       rxQueues = 5,
-			       txQueues = perc_constants.MAX_QUEUES+1}
+			       txQueues = run_config.maxQueues+1}
    
 	-- filters for data packets
    txDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
@@ -65,8 +74,9 @@ function singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
    tableDst[txPort] = txPort
    tableDst[rxPort] = rxPort
    
-   dpdk.launchLua("loadDataSlave", txDev, cdfFilepath,
-		  scaling, interArrivalTime, numFlows, txPort, txPort,
+   dpdk.launchLua("loadDataSlave", txDev,
+		  run_config,
+		  txPort, txPort,
 		  tableDst,
 		  true, false,
 		  readyPipes, 1)
@@ -77,8 +87,9 @@ function singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
    -- 		  true, false,
    -- 		  readyPipes, 2)
 
-   dpdk.launchLua("loadDataSlave", rxDev, nil,
-   		  nil, nil, nil, rxPort, rxPort,
+   dpdk.launchLua("loadDataSlave", rxDev,
+		  run_config,
+		  rxPort, rxPort,
    		  nil,
    		  false, true,
    		  readyPipes, 2)
@@ -92,16 +103,17 @@ function singleConnection(cdfFilepath, scaling, interArrivalTime, numFlows)
    dpdk.waitForSlaves()
 end
 
-function loadDataSlave(dev, cdfFilepath, 
-		       scaling, interArrivalTime, numFlows,
+function loadDataSlave(dev, run_config,
 		       percgSrc, ethSrc, tableDst,
 		       isSending, isReceiving,
 		       readyPipes, id)
+   -- scaling, interArrivalTime, numFlows,
+
    local readyInfo = {["pipes"]=readyPipes, ["id"]=id}
    print(readyInfo.id)
    if tableDst ~= nil and percgSrc ~= nil then   
       tableDst[percgSrc] = nil end
-   data.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows,
+   data.dataSlave(dev, run_config,
 		percgSrc, ethSrc, tableDst,
 		isSending, isReceiving,
 		readyInfo)		

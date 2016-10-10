@@ -169,7 +169,7 @@ function senderControlProcess(pkt, queueInfo, dpdkNow)
    assert(newRate ~= nil)
    assert(queueInfo.currentRate ~= -1)
    if (newRate < queueInfo.currentRate
-       or queueInfo.currentRate == perc_constants.startRate) then -- start with new rate ASAP
+       or queueInfo.currentRate == run_config.startRate) then -- start with new rate ASAP
       queueInfo.nextRate = newRate
       queueInfo.changeTime = dpdkNow
    elseif (newRate == queueInfo.currentRate) then
@@ -184,7 +184,7 @@ function senderControlProcess(pkt, queueInfo, dpdkNow)
       -- TODO(lav): not perfectly conservative but that's ok
       if (queueInfo.nextRate == -1) then
       	 queueInfo.nextRate = newRate
-      	 queueInfo.changeTime = dpdkNow + 2 * perc_constants.rtts
+      	 queueInfo.changeTime = dpdkNow + 2 * run_config.delayBeforeIncrease
       else
 	 queueInfo.nextRate = newRate
 	 -- changeTime as is
@@ -205,7 +205,7 @@ function senderControlProcess(pkt, queueInfo, dpdkNow)
 end
 
 -- sends data packets and receives acks
-function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows,
+function dataMod.dataSlave(dev, run_config,
 			 percgSrc, ethSrc,
 			 tableDst, 
 			 isSending, isReceiving,
@@ -235,18 +235,6 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       .. ", isReceiving " .. tostring(isReceiving)
 	       .. "\n")
 
-   if isSending == false then
-      assert(cdfFilepath == nil)
-      assert(numFlows == nil)
-      assert(tableDst == nil)
-   end
-
-   if isSending then
-      assert(cdfFilepath ~= nil)
-      assert(numFlows ~= nil)
-      assert(tableDst ~= nil)
-   end
-
    if isSending or isReceiving then
       assert(dev ~= nil)
       assert(ethSrc ~= nil)
@@ -262,12 +250,12 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 
    if isSending then
       flowSizes = fsd.create()
-      flowSizes:loadCDF(cdfFilepath)
+      flowSizes:loadCDF(run_config.cdfFilepath)
       local avgFlowSize = flowSizes:avg()
       assert(avgFlowSize > 0)
       log:info("loaded flow sizes file with avg. flow size "
 		  .. tostring(avgFlowSize/1500) .. " packets, will scale by "
-		  .. tostring(scaling))
+		  .. tostring(run_config.scaling))
 
       percgDst, ethDst = next(tableDst)
       if type(ethDst) == "number" then
@@ -335,7 +323,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
       -- link statistics, and all tx queues      
       --txCtr = stats:newDevTxCounter(dev, "plain")
       txQueues = {}
-      for q=1,perc_constants.MAX_QUEUES do
+      for q=1,run_config.maxQueues do
 	 txQueues[q] = dev:getTxQueue(q)
       end
       rxCtr = stats:newDevRxCounter(dev, "plain")
@@ -367,9 +355,9 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
       ackTxBufs = ackMem:bufArray()
       rxQueueInfo =
 	 ffi.new("rxQueueInfo[?]",
-		 perc_constants.MAX_QUEUES+1, {}) -- indexing from 
+		 run_config.maxQueues+1, {}) -- indexing from 
       -- invariants
-      for q=1,perc_constants.MAX_QUEUES do
+      for q=1,run_config.maxQueues do
 	 rxQueueInfo[q].recv = 0ULL
 	 rxQueueInfo[q].size = 0ULL
 	 rxQueueInfo[q].acked = 0ULL
@@ -385,7 +373,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
       mem = {}
       txBufs = {}
       freeQueues = {}
-      for i=1, perc_constants.MAX_QUEUES do
+      for i=1, run_config.maxQueues do
 	 if i ~= perc_constants.CONTROL_TXQUEUE
 	    and i ~= perc_constants.NEW_CONTROL_TXQUEUE
 	    and i ~= perc_constants.ACK_TXQUEUE
@@ -394,7 +382,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	 end
       end
       
-      for q = 1, perc_constants.MAX_QUEUES do
+      for q = 1, run_config.maxQueues do
 	 mem[q] = memory.createMemPool{
 	    ["func"]=function(buf)
 	       buf:getPercgPacket():fill{
@@ -405,13 +393,13 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	 txBufs[q] = mem[q]:bufArray()
       end
       
-      queueInfo = ffi.new("txQueueInfo[?]", perc_constants.MAX_QUEUES+1) -- indexing from 1
+      queueInfo = ffi.new("txQueueInfo[?]", run_config.maxQueues+1) -- indexing from 1
       ackRxQueue = dev:getRxQueue(perc_constants.ACK_RXQUEUE)
       ackRxBufs = memory.bufArray()
 
       lastAckTime = dpdk.getTime()
       lastPeriodicTime = dpdk.getTime()
-      nextSendTime =  dpdk.getTime() + interArrivalTime
+      nextSendTime =  dpdk.getTime() + run_config.interArrivalTime
       nextFlowId = 1
       
       numStarted = 0
@@ -426,19 +414,19 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
    -- a thread that's receiving runs forever
    -- a thread that's only sending stops as soon as all finish
    while dpdk.running() and
-      ((isSending and numFinished < numFlows)
+      ((isSending and numFinished < run_config.numFlows)
 	 or isReceiving)  do
 	 local dpdkNow = dpdk.getTime()
 	 
 	 if isSending then
 	    -- print("core " .. thisCore .. " must wait for " .. (nextSendTime - dpdkNow)
 	    --	     .. " s so it can start flow # " .. nextFlowId .. " / " .. numFlows .. "\n")
-	    if dpdkNow > nextSendTime and nextFlowId <= numFlows then
+	    if dpdkNow > nextSendTime and nextFlowId <= run_config.numFlows then
 	       -- print("core " .. thisCore .. " starting flow # " .. nextFlowId)
 	       -- (get start messages)
-	       nextSendTime = dpdkNow	+ interArrivalTime
+	       nextSendTime = dpdkNow	+ run_config.interArrivalTime
 	       numStarted = numStarted + 1
-	       local size = math.ceil((flowSizes:value() * scaling)/1500.0)
+	       local size = math.ceil((flowSizes:value() * run_config.scaling)/1500.0)
 	       local flow = nextFlowId
 	       local percgDst = 1
 	       assert(next(freeQueues) ~= nil)
@@ -453,9 +441,13 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 	       queueInfo[q].active = true
 	       queueInfo[q].acked_time = dpdkNow
 	       queueInfo[q].start_time = dpdkNow
-	       assert(perc_constants.startRate ~= nil)
-	       queueInfo[q].currentRate = perc_constants.startRate --dev:getTxQueue(q):getTxRate() 
-	       --dev:getTxQueue(q):setRate(perc_constants.startRate) -- start blasting right away v/s trickling right away
+	       assert(run_config.startRate ~= nil)
+	       queueInfo[q].currentRate = run_config.startRate
+	       --dev:getTxQueue(q):getTxRate()
+	       if (run_config.startRate >= 0) then
+		  log:info("setting rate of flow " .. tostring(flow) .. " to " .. run_config.startRate)
+		  dev:getTxQueue(q):setRate(run_config.startRate) -- start blasting right away v/s trickling right away
+	       end
 	       queueInfo[q].nextRate = -1
 	       queueInfo[q].changeTime = -1
 	       log:info("flow " .. tostring(flow)
@@ -546,7 +538,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     -- TODO: check it's passed by ref
 		     senderControlProcess(pkt, qi, dpdkNow) -- At this point sender sets packet direction forward
 		     if qi ~= nil and qi.nextRate ~= -1 and qi.changeTime <= dpdkNow then
-			--log:info("setting rate of flow " .. tostring(qi.flow) .. " to " .. qi.nextRate)
+			log:info("setting rate of flow " .. tostring(qi.flow) .. " to " .. qi.nextRate)
 			txQueues[q]:setRate(qi.nextRate)
 			qi.currentRate = qi.nextRate
 			qi.nextRate = -1
@@ -574,7 +566,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 
 	 if isSending then
 	    do -- (send data packets)
-	       for q=1,perc_constants.MAX_QUEUES do
+	       for q=1,run_config.maxQueues do
 		  assert(queueInfo[q].size >= queueInfo[q].sent)
 		  if queueInfo[q].active
 		  and queueInfo[q].sent < queueInfo[q].size then		     
@@ -631,7 +623,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     end		     			
 		     --txCtr:update()
 		  end -- ends if active
-	       end  -- ends for q=1,perc_constants.MAX_QUEUES
+	       end  -- ends for q=1,run_config.maxQueues
 	    end  -- ends do (send data packets)
 	    
 	    do -- (receive acks)
@@ -688,9 +680,9 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 
 	    dpdkNow = dpdk.getTime()
 	    -- timeout flows that haven't received acks in a while
-	    if dpdkNow > lastAckTime + perc_constants.tx_ack_timeout then
+	    if dpdkNow > lastAckTime + run_config.txAckTimeout then
 	       lastAckTime = dpdkNow
-	       for q=1,perc_constants.MAX_QUEUES do
+	       for q=1,run_config.maxQueues do
 		  if queueInfo[q].active and
 		     (lastAckTime > tonumber(queueInfo[q].acked_time)
 		      or queueInfo[q].size == queueInfo[q].acked) then
@@ -766,7 +758,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		  local now = dpdk.getTime()
 		  if ackNow then
 		     local newAcks = 0
-		     for q=1,perc_constants.MAX_QUEUES do
+		     for q=1,run_config.maxQueues do
 			assert(rxQueueInfo[q].recv <= rxQueueInfo[q].size)
 			if rxQueueInfo[q].recv > rxQueueInfo[q].acked then
 			   newAcks = newAcks + 1 end
@@ -774,7 +766,7 @@ function dataMod.dataSlave(dev, cdfFilepath, scaling, interArrivalTime, numFlows
 		     if newAcks > 0 then
 			ackTxBufs:allocN(ACK_PACKET_SIZE, newAcks)	    
 			local b = 1
-			for q=1,perc_constants.MAX_QUEUES do	 
+			for q=1,run_config.maxQueues do	 
 			   if rxQueueInfo[q].recv > rxQueueInfo[q].acked then
 			      rxQueueInfo[q].acked = rxQueueInfo[q].recv
 			      assert(b <= newAcks)

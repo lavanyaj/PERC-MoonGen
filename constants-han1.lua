@@ -1,5 +1,4 @@
 constantsMod = {
-   ["APP_MAX_FLOW_SIZE_BYTES"] = 3e6,
    ["CONTROL_PACKET_SIZE"] = 128,
    -- 11B b/n control and host state, 6 b/n .. agg 80
    ["DATA_PACKET_SIZE"] = 1500,
@@ -14,10 +13,6 @@ constantsMod = {
    ["ACK_RXQUEUE"] = 3,
    ["ACK_TXQUEUE"] = 3,
    ["DROP_QUEUE"] = 4,
-   ["MAX_QUEUES"] = 60,
-   ["tx_ack_timeout"] = 20 * (0.1),
-   ["rtts"] = 0.0005, -- delay before increasing rate
-   ["startRate"] = 11, -- Mb/s
    -- device id to mac address mapping (based on FPGA routing
    -- and wiring as on 8/18 on DCA server)
    ["ethAddrStr2"] = "0c:33:33:33:33:33",
