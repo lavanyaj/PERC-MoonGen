@@ -1,6 +1,6 @@
 local device	= require "device"
 local ffi = require("ffi")
-local dpdk	= require "dpdk"
+local dpdk	= require "moongen"
 local dpdkc	= require "dpdkc"
 local log = require "log"
 local memory	= require "memory"
@@ -205,12 +205,27 @@ function senderControlProcess(pkt, queueInfo, dpdkNow)
 end
 
 -- sends data packets and receives acks
-function dataMod.dataSlave(dev, run_config,
+function dataMod.dataSlave(devPort, run_config,
 			 percgSrc, ethSrc,
 			 tableDst, 
 			 isSending, isReceiving,
 			 readyInfo)
    local thisCore = dpdk.getCore()   
+
+   local numTxQueues = run_config.maxQueues
+   
+   local myDev = device.config{port = devPort,
+			     rxQueues = 5,
+			     txQueues = numTxQueues+1}
+   -- filters
+   myDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
+   myDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
+   myDev:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
+   --myDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
+   
+   print("dev set up with "
+	    .. tostring(myDev.txQueues) .. " (".. tostring(numTxQueues) .. ") tx queues and "
+	    .. tostring(myDev.rxQueues) .. " (".. tostring(5) .. ") rx queues.\n")
 
    if type(ethSrc) == "number" then
       --local buf = ffi.new("char[20]")
@@ -228,7 +243,7 @@ function dataMod.dataSlave(dev, run_config,
    end
 
    log:info("Data slave running on "
-	       .. " dev " .. dev.id 
+	       .. " dev " .. myDev.id 
 	       .. " MAC addr " .. tostring(ethSrc)
 	       .. ", core " .. thisCore
 	       .. ", isSending " .. tostring(isSending)
@@ -236,7 +251,7 @@ function dataMod.dataSlave(dev, run_config,
 	       .. "\n")
 
    if isSending or isReceiving then
-      assert(dev ~= nil)
+      assert(myDev ~= nil)
       assert(ethSrc ~= nil)
       assert(percgSrc ~= nil)
       assert(readyInfo ~= nil)
@@ -259,10 +274,7 @@ function dataMod.dataSlave(dev, run_config,
 
       percgDst, ethDst = next(tableDst)
       if type(ethDst) == "number" then
-	 --local buf = ffi.new("char[20]")
-	 --dpdkc.get_mac_addr(ethDst, buf)
 	 local ethDstStr = perc_constants["ethAddrStr"..ethDst]
-	 -- ffi.string(buf)      
 	 ethDst = parseMacAddress(ethDstStr)
       elseif istype(macAddrType, ethDst) then
 	 ethDst = ethDst
@@ -273,11 +285,20 @@ function dataMod.dataSlave(dev, run_config,
 
    -- common variables
    -- for control packets processing
-   local cMem = nil
    local cBufs = nil
-   local cRxQueue = nil
    local link = nil
 
+   -- special queues
+   local cRxQueue = nil
+   local cTxQueue = nil
+   local cNewTxQueue = nil
+
+   local ackTxQueue = nil
+   local ackRxQueue = nil
+   
+   local dataRxQueue = nil
+   
+   
    -- link statistics
    local txCtr = nil
    local rxCtr = nil
@@ -290,7 +311,6 @@ function dataMod.dataSlave(dev, run_config,
    local txBufs = nil
    local freeQueues = nil
    local queueInfo = nil
-   local ackRxQueue = nil
    local ackRxBufs = nil
 
    local lastAckTime = nil
@@ -304,7 +324,6 @@ function dataMod.dataSlave(dev, run_config,
    local ackMem = nil
    local ackTxBufs = nil
    local rxQueueInfo = nil
-   local dataRxQueue = nil
    local dataRxBufs = nil
 
    -- monitoring
@@ -312,26 +331,28 @@ function dataMod.dataSlave(dev, run_config,
    if isMonitoring then
       logFlowInfo = ffi.new("logFlow[?]",
 			    1000, {})
-      end
-   -- To receive and reply to control packets
+   end
+   
    if isSending or isReceiving then
-      cMem = memory.createMemPool()
-      cBufs = memory.bufArray()   
-      cRxQueue = dev:getRxQueue(perc_constants.CONTROL_RXQUEUE)
-      -- CONTROL_TX_QUEUE   
+      -- bufArray for receiving existing control packets into CONTROL_RXQUEUE
+      cBufs = memory.bufArray()
+      cRxQueue = myDev:getRxQueue(perc_constants.CONTROL_RXQUEUE)      
+      cTxQueue = myDev:getTxQueue(perc_constants.CONTROL_TXQUEUE)      
       link = PercLink:new()
-      -- link statistics, and all tx queues      
-      --txCtr = stats:newDevTxCounter(dev, "plain")
-      txQueues = {}
-      for q=1,run_config.maxQueues do
-	 txQueues[q] = dev:getTxQueue(q)
-      end
-      rxCtr = stats:newDevRxCounter(dev, "plain")
+      rxCtr = stats:newDevRxCounter(myDev, "plain")
    end
    
    if isSending then
-      -- To send new control packets and receive/ responde
-      -- to existing control packets
+      -- queues for sending data packets
+      -- and queue for sending new control packets
+      txQueues = {}
+      for q=1,numTxQueues do
+	 txQueues[q] = myDev:getTxQueue(q)
+      end
+
+      -- memory pool and bufArray for sending
+      -- new control packets from NEW_CONTROL_TXQUEUE
+      cNewTxQueue = myDev:getTxQueue(perc_constants.NEW_CONTROL_TXQUEUE)
       cNewMem = memory.createMemPool{
       	 ["func"]=function(buf)
 	    buf:getPercgPacket():fill{
@@ -339,11 +360,13 @@ function dataMod.dataSlave(dev, run_config,
 	       ethType = eth.TYPE_PERCG}
       end}
       cNewBufs = cNewMem:bufArray()
-      -- NEW_CONTROL_TXQUEUE
+
    end
 
    if isReceiving then
-      -- To send ACKs and receive data
+      -- memory pool for sending ACKs from ACK_TXQUEUE
+      -- and associcated bufArray
+      ackTxQueue = myDev:getTxQueue(perc_constants.ACK_TXQUEUE)
       ackMem = memory.createMemPool{
 	 ["func"]=function(buf) 
 	    buf:getPercgPacket():fill{
@@ -355,17 +378,17 @@ function dataMod.dataSlave(dev, run_config,
       ackTxBufs = ackMem:bufArray()
       rxQueueInfo =
 	 ffi.new("rxQueueInfo[?]",
-		 run_config.maxQueues+1, {}) -- indexing from 
+		 numTxQueues+1, {}) -- indexing from 
       -- invariants
-      for q=1,run_config.maxQueues do
+      for q=1,numTxQueues do
 	 rxQueueInfo[q].recv = 0ULL
 	 rxQueueInfo[q].size = 0ULL
 	 rxQueueInfo[q].acked = 0ULL
       end
 
-      dataRxQueue = dev:getRxQueue(perc_constants.DATA_RXQUEUE)
+      -- bufArray for receiving data packets into DATA_RXQUEUE
+      dataRxQueue = myDev:getRxQueue(perc_constants.DATA_RXQUEUE)
       dataRxBufs = memory.bufArray()
-      -- ACK_TXQUEUE
    end
 
    if isSending then
@@ -373,7 +396,7 @@ function dataMod.dataSlave(dev, run_config,
       mem = {}
       txBufs = {}
       freeQueues = {}
-      for i=1, run_config.maxQueues do
+      for i=1, numTxQueues do
 	 if i ~= perc_constants.CONTROL_TXQUEUE
 	    and i ~= perc_constants.NEW_CONTROL_TXQUEUE
 	    and i ~= perc_constants.ACK_TXQUEUE
@@ -381,8 +404,10 @@ function dataMod.dataSlave(dev, run_config,
 	    table.insert(freeQueues, i)
 	 end
       end
-      
-      for q = 1, run_config.maxQueues do
+
+      -- separate mempool for each tx queue
+      -- (control, new control, ack, and each data queue)
+      for q = 1, numTxQueues do
 	 mem[q] = memory.createMemPool{
 	    ["func"]=function(buf)
 	       buf:getPercgPacket():fill{
@@ -393,19 +418,45 @@ function dataMod.dataSlave(dev, run_config,
 	 txBufs[q] = mem[q]:bufArray()
       end
       
-      queueInfo = ffi.new("txQueueInfo[?]", run_config.maxQueues+1) -- indexing from 1
-      ackRxQueue = dev:getRxQueue(perc_constants.ACK_RXQUEUE)
+      queueInfo = ffi.new("txQueueInfo[?]", numTxQueues+1) -- indexing from 1
+      ackRxQueue = myDev:getRxQueue(perc_constants.ACK_RXQUEUE)
       ackRxBufs = memory.bufArray()
-
       lastAckTime = dpdk.getTime()
       lastPeriodicTime = dpdk.getTime()
       nextSendTime =  dpdk.getTime() + run_config.interArrivalTime
-      nextFlowId = 1
-      
+      nextFlowId = 1      
       numStarted = 0
       numFinished = 0
    end
 
+   -- validate queues
+   if isSending then
+      assert(cRxQueue ~= nil)
+      assert(cTxQueue ~= nil)
+      assert(cNewTxQueue ~= nil)
+      assert(ackRxQueue ~= nil)
+      
+      assert(cRxQueue.qid == perc_constants.CONTROL_RXQUEUE)
+      assert(cTxQueue.qid == perc_constants.CONTROL_TXQUEUE)
+      assert(cNewTxQueue.qid == perc_constants.NEW_CONTROL_TXQUEUE)
+      assert(ackRxQueue.qid == perc_constants.ACK_RXQUEUE)
+      for q=1,numTxQueues do
+	 assert(txQueues[q] ~= nil)
+	 assert(txQueues[q].qid == q)
+      end
+   end
+   if isReceiving then
+      assert(cRxQueue ~= nil)
+      assert(cTxQueue ~= nil)
+      assert(ackTxQueue ~= nil)
+      assert(dataRxQueue ~= nil)
+
+      assert(cRxQueue.qid == perc_constants.CONTROL_RXQUEUE)
+      assert(cTxQueue.qid == perc_constants.CONTROL_TXQUEUE)
+      assert(ackTxQueue.qid == perc_constants.ACK_TXQUEUE)
+      assert(dataRxQueue.qid == perc_constants.DATA_RXQUEUE)
+   end
+   
    ipc.waitTillReady(readyInfo)
    if isSending and (isReceiving == false) then
       dpdk.sleepMillis(500)
@@ -443,10 +494,10 @@ function dataMod.dataSlave(dev, run_config,
 	       queueInfo[q].start_time = dpdkNow
 	       assert(run_config.startRate ~= nil)
 	       queueInfo[q].currentRate = run_config.startRate
-	       --dev:getTxQueue(q):getTxRate()
+	       --myDev:getTxQueue(q):getTxRate()
 	       if (run_config.startRate >= 0) then
 		  log:info("setting rate of flow " .. tostring(flow) .. " to " .. run_config.startRate)
-		  dev:getTxQueue(q):setRate(run_config.startRate) -- start blasting right away v/s trickling right away
+		  myDev:getTxQueue(q):setRate(run_config.startRate) -- start blasting right away v/s trickling right away
 	       end
 	       queueInfo[q].nextRate = -1
 	       queueInfo[q].changeTime = -1
@@ -465,7 +516,7 @@ function dataMod.dataSlave(dev, run_config,
 	       link:processPercc1Packet(pkt)
 	       -- stored in host or network order??
 	       -- if (true) then
-	       -- 	  print("dev " .. dev.id .. " sent new control packet from "
+	       -- 	  print("dev " .. myDev.id .. " sent new control packet from "
 	       -- 		   .. pkt.eth:getSrcString()
 	       -- 		   .. " to " .. pkt.eth:getDstString()
 	       -- 		   .. " of type " .. pkt.eth:getType()
@@ -476,7 +527,7 @@ function dataMod.dataSlave(dev, run_config,
 	       if isMonitoring then
 		  logFlowInfo[flow].first_control_send_time = dpdk.getTime()
 	       end
-	       txQueues[perc_constants.NEW_CONTROL_TXQUEUE]:send(cNewBufs)
+	       cNewTxQueue:sendSingle(cNewBufs[1])
 	       nextFlowId = nextFlowId + 1
 	    end -- ends do (get start messages)
 	 end -- ends IFSENDING
@@ -490,7 +541,7 @@ function dataMod.dataSlave(dev, run_config,
 	       local pkt = cBufs[b]:getPercc1Packet()
 	       pkt.percc1:doNtoh()
 	       -- if (true) then
-	       -- 	  print("dev " .. dev.id .. " got control packet from "
+	       -- 	  print("dev " .. myDev.id .. " got control packet from "
 	       -- 		   .. pkt.eth:getSrcString()
 	       -- 		   .. " to " .. pkt.eth:getDstString()
 	       -- 		   .. " forward? " .. tostring(pkt.percc1:IsForward())
@@ -499,7 +550,7 @@ function dataMod.dataSlave(dev, run_config,
 	       -- end		    
 
 	       if pkt.percc1:getIsForward() == false then
-		  -- if (true) then print (" ingress link processing at dev " .. dev.id) end
+		  -- if (true) then print (" ingress link processing at dev " .. myDev.id) end
 		  link:processPercc1Packet(pkt)
 	       end
 	       
@@ -546,13 +597,13 @@ function dataMod.dataSlave(dev, run_config,
 		     end
 		     assert(pkt.percc1:getIsForward() or pkt.eth:getType() == eth.TYPE_DROP)
 		     if (pkt.eth:getType() ~= eth.TYPE_DROP) then
-			-- if (true) then print (" egress link processing at dev " .. dev.id) end
+			-- if (true) then print (" egress link processing at dev " .. myDev.id) end
 			link:processPercc1Packet(pkt)
 		     end
 		  end -- ends IFSENDING
 	       end
 	       -- if (true) then
-	       -- 	  print("dev " .. dev.id .. " echoed control packet from "
+	       -- 	  print("dev " .. myDev.id .. " echoed control packet from "
 	       -- 		   .. pkt.eth:getSrcString()
 	       -- 		   .. " to " .. pkt.eth:getDstString()
 	       -- 		   .. " of type " .. pkt.eth:getType()
@@ -561,12 +612,12 @@ function dataMod.dataSlave(dev, run_config,
 	       -- end
 	       pkt.percc1:doHton()
 	    end
-	    txQueues[perc_constants.CONTROL_TXQUEUE]:sendN(cBufs, rx)
+	    cTxQueue:sendN(cBufs, rx)
 	 end
 
 	 if isSending then
 	    do -- (send data packets)
-	       for q=1,run_config.maxQueues do
+	       for q=1,numTxQueues do
 		  assert(queueInfo[q].size >= queueInfo[q].sent)
 		  if queueInfo[q].active
 		  and queueInfo[q].sent < queueInfo[q].size then		     
@@ -635,7 +686,7 @@ function dataMod.dataSlave(dev, run_config,
 		  local q = pkt.payload.uint64[1]
 		  local acked = pkt.payload.uint64[2]
 		  -- if (b==1) then
-		  --    print("dev " .. dev.id .. " got ack packet from "
+		  --    print("dev " .. myDev.id .. " got ack packet from "
 		  -- 	      .. pkt.eth:getSrcString()
 		  -- 	      .. " to " .. pkt.eth:getDstString())
 		  -- end		    
@@ -662,7 +713,7 @@ function dataMod.dataSlave(dev, run_config,
 			   logFlowInfo[flow].timed_out = false
 			end
 			-- 				    .. " norm_fct (us/byte): " .. tostring(norm_fct)
-			log:info("flow " .. tostring(dev.id * 10000ULL + queueInfo[q].flow)
+			log:info("flow " .. tostring(myDev.id * 10000ULL + queueInfo[q].flow)
 				    .. " ended (queue " .. tostring(q) .. ")"
 				    .. " fct: " .. tostring(fct)
 				    .. " size: " .. tostring(queueInfo[q].size)
@@ -682,7 +733,7 @@ function dataMod.dataSlave(dev, run_config,
 	    -- timeout flows that haven't received acks in a while
 	    if dpdkNow > lastAckTime + run_config.txAckTimeout then
 	       lastAckTime = dpdkNow
-	       for q=1,run_config.maxQueues do
+	       for q=1,numTxQueues do
 		  if queueInfo[q].active and
 		     (lastAckTime > tonumber(queueInfo[q].acked_time)
 		      or queueInfo[q].size == queueInfo[q].acked) then
@@ -716,7 +767,7 @@ function dataMod.dataSlave(dev, run_config,
 		     local q = pkt.payload.uint64[1]
 		     local size = pkt.payload.uint64[4]
 		      -- if (b == 1) then
-		      -- 	print("dev " .. dev.id .. " got data packet from "
+		      -- 	print("dev " .. myDev.id .. " got data packet from "
 		      -- 		 .. pkt.eth:getSrcString()
 		      -- 		 .. " to " .. pkt.eth:getDstString())
 		      -- end		    
@@ -758,7 +809,7 @@ function dataMod.dataSlave(dev, run_config,
 		  local now = dpdk.getTime()
 		  if ackNow then
 		     local newAcks = 0
-		     for q=1,run_config.maxQueues do
+		     for q=1,numTxQueues do
 			assert(rxQueueInfo[q].recv <= rxQueueInfo[q].size)
 			if rxQueueInfo[q].recv > rxQueueInfo[q].acked then
 			   newAcks = newAcks + 1 end
@@ -766,7 +817,7 @@ function dataMod.dataSlave(dev, run_config,
 		     if newAcks > 0 then
 			ackTxBufs:allocN(ACK_PACKET_SIZE, newAcks)	    
 			local b = 1
-			for q=1,run_config.maxQueues do	 
+			for q=1,numTxQueues do	 
 			   if rxQueueInfo[q].recv > rxQueueInfo[q].acked then
 			      rxQueueInfo[q].acked = rxQueueInfo[q].recv
 			      assert(b <= newAcks)
@@ -784,14 +835,14 @@ function dataMod.dataSlave(dev, run_config,
 			      pkt.percg:setSource(rxQueueInfo[q].percgDst)
 			      pkt.percg:setDestination(rxQueueInfo[q].percgSrc)
 			      if (b==1) then
-			      	 print("dev " .. dev.id ..  " sent ack packet from "
+			      	 print("dev " .. myDev.id ..  " sent ack packet from "
 			      		  .. pkt.eth:getSrcString()
 			      		  .. " to " .. pkt.eth:getDstString())
 			      end		    
 			   end
 			end
 			--txCtr:update()
-			txQueues[perc_constants.ACK_TXQUEUE]:send(ackTxBufs)
+			ackTxQueue:send(ackTxBufs)
 		     end -- ends if newAcks > 0	     
 		  end -- ends do for sending ACKs
 	       end -- ends fo for receiving data and sending ACKs

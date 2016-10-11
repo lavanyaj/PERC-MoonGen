@@ -2,7 +2,7 @@
 -- sudo ./build/MoonGen examples/perc-moongen/main.lua 0 1 examples/perc-moongen/DCTCP_CDF 1000
 -- two threads per port
 local filter    = require "filter"
-local dpdk	= require "dpdk"
+local dpdk	= require "moongen"
 local device	= require "device"
 local log = require "log"
 local pipe		= require "pipe"
@@ -40,33 +40,33 @@ function singleConnection(run_config)
    local txPort = 0
    local rxPort = 1
    -- local macAddrType = ffi.typeof("union mac_address")	
-   local txDev = device.config{port = txPort,
-			       rxQueues = 5,
-			       txQueues = run_config.maxQueues +1}
-   local rxDev = device.config{port = rxPort,
-			       rxQueues = 5,
-			       txQueues = run_config.maxQueues+1}
+   -- local txDev = device.config{port = txPort,
+   -- 			       rxQueues = 5,
+   -- 			       txQueues = run_config.maxQueues +1}
+   -- local rxDev = device.config{port = rxPort,
+   -- 			       rxQueues = 5,
+   -- 			       txQueues = run_config.maxQueues+1}
+
+   -- -- filters for data packets
+   -- txDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
+   -- rxDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
    
-	-- filters for data packets
-   txDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
-   rxDev:l2Filter(eth.TYPE_ACK, perc_constants.ACK_RXQUEUE)
-   
-   -- filters for control packets
-   txDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
-   rxDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
-   log:info("filter packets with ethType "
-	       .. eth.TYPE_PERCG .. " to rx queue "
-	       .. perc_constants.CONTROL_RXQUEUE .. " on device " .. txDev.id
-	       .. ", " .. eth.TYPE_PERCG .. " to rx queue "
-	       .. perc_constants.CONTROL_RXQUEUE .. " on device " .. rxDev.id)
+   -- -- filters for control packets
+   -- txDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
+   -- rxDev:l2Filter(eth.TYPE_PERCG, perc_constants.CONTROL_RXQUEUE)
+   -- log:info("filter packets with ethType "
+   -- 	       .. eth.TYPE_PERCG .. " to rx queue "
+   -- 	       .. perc_constants.CONTROL_RXQUEUE .. " on device " .. txDev.id
+   -- 	       .. ", " .. eth.TYPE_PERCG .. " to rx queue "
+   -- 	       .. perc_constants.CONTROL_RXQUEUE .. " on device " .. rxDev.id)
 
    
-   rxDev:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
-   txDev:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
+   -- rxDev:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
+   -- txDev:l2Filter(eth.TYPE_DROP, perc_constants.DROP_QUEUE)
 
-   -- rate limit control packets
-   txDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
-   rxDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
+   -- -- rate limit control packets
+   -- txDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
+   -- rxDev:getTxQueue(perc_constants.CONTROL_TXQUEUE):setRate(50)
 
    dpdk.setRuntime(5)
    local readyPipes = ipc.getReadyPipes(2)
@@ -74,7 +74,7 @@ function singleConnection(run_config)
    tableDst[txPort] = txPort
    tableDst[rxPort] = rxPort
    
-   dpdk.launchLua("loadDataSlave", txDev,
+   dpdk.startTask("loadDataSlave", txPort,
 		  run_config,
 		  txPort, txPort,
 		  tableDst,
@@ -87,7 +87,7 @@ function singleConnection(run_config)
    -- 		  true, false,
    -- 		  readyPipes, 2)
 
-   dpdk.launchLua("loadDataSlave", rxDev,
+   dpdk.startTask("loadDataSlave", rxPort,
 		  run_config,
 		  rxPort, rxPort,
    		  nil,
@@ -100,10 +100,10 @@ function singleConnection(run_config)
    -- 		  false, true,
    -- 		  readyPipes, 2)
 
-   dpdk.waitForSlaves()
+   dpdk.waitForTasks()
 end
 
-function loadDataSlave(dev, run_config,
+function loadDataSlave(port, run_config,
 		       percgSrc, ethSrc, tableDst,
 		       isSending, isReceiving,
 		       readyPipes, id)
@@ -113,7 +113,7 @@ function loadDataSlave(dev, run_config,
    print(readyInfo.id)
    if tableDst ~= nil and percgSrc ~= nil then   
       tableDst[percgSrc] = nil end
-   data.dataSlave(dev, run_config,
+   data.dataSlave(port, run_config,
 		percgSrc, ethSrc, tableDst,
 		isSending, isReceiving,
 		readyInfo)		
